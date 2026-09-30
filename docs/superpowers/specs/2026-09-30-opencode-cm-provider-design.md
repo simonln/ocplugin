@@ -246,25 +246,33 @@ export function toModelInfo(raw: GatewayModel, providerID: Provider.ID): Model.I
 `overrides.<modelID>` 支持 `name` / `context` / `output` / `enabled` / `package`，
 在默认映射之后应用。
 
-## 6. 403/401 自动隔离
+## 6. 403 自动隔离
 
 `/models` 列出的模型不代表有权限（§2.7），且无法预探测。采用惰性隔离：
 
 ```ts
 await ctx.session.hook("retry", (event) => {
-  const status = event.error.status ?? 0
-  if (status !== 401 && status !== 403) return
-  if (!quarantine.add(`${event.model.providerID}/${event.model.id}`)) return
-  void ctx.storage.set(STORAGE_KEY, quarantine.list())
-  void ctx.model.reload()
+  if (!isQuarantineStatus(event.error.status ?? 0)) return
+  if (event.model.providerID !== options.providerID) return
+  void registry.quarantine(event.model.id)
 }, { providerID: options.providerID })
 ```
 
-- 隔离集合持久化在 `ctx.storage`（键 `quarantined`）
+**只对 403 隔离，绝不对 401 隔离。** 401 是凭据级失败（影响全部模型，通常是 key 过期或无效），
+不是模型级的授权结论；403 才是模型级拒绝。把 401 当成持久证据会让一次 key 过期永久隐藏
+某个模型——这是实现过程中由终审发现并修正的设计缺陷。
+
+- **隔离集合按凭据作用域持久化**在 `ctx.storage`（键 `quarantined`），存储形状为
+  `{ credential, keys }`，其中 `credential` 由已解析的连接推导（`credential:<id>` 或 `env:<name>`）。
+  只有当存储中的作用域与当前凭据一致时才采纳其 `keys`，否则从空集合开始；无法识别的
+  历史值（包括旧的裸数组形式）一律按空处理且不抛错。这避免了切换账号后继承上一个账号的隔离集合。
 - `ctx.model.transform` 在每次 `provider.reload()` 后重放该集合，将命中模型置
   `enabled = false`，因此刷新不会让被隔离的模型复活
-- 通过 `options.quarantineOnAuthFailure: false` 可整体关闭
+- 通过 `options.quarantineOnAuthFailure: false` 可整体关闭：既不恢复、不重放，也不写入
 - 用户在 `/models` 中不再看到被隔离的模型
+- **已知残留缺陷**（终审记录，见 §11）：`runRefresh` 在抓取目录之前就调用
+  `adoptQuarantine`，而失败回滚只恢复 provider 状态、不恢复隔离身份。因此在切换账号且
+  该次刷新失败时，后续的隔离写入会被记到新凭据名下。窗口很窄且会在下一次成功刷新时自愈。
 
 ## 7. Options
 
@@ -381,6 +389,11 @@ D:\code\repos\ocplugin\
 - `cost` 为空，因此 `/models` 不显示价格信息。
 - `time.released` 为 0，模型无法按发布时间排序。
 - 隔离机制依赖实际请求失败，因此一个无权模型的首次调用必然失败一次。
+- **残留缺陷（终审记录）**：`runRefresh` 在抓取目录前调用 `adoptQuarantine`，而失败回滚
+  只恢复 provider 状态、不恢复隔离身份与集合。切换账号且该次刷新失败时，后续隔离写入会被
+  记到新凭据名下，且旧凭据的内存隔离集合被丢弃（磁盘上仍按旧凭据作用域保留，会在下一次
+  成功刷新时自愈）。触发条件为「切换账号 + 瞬时抓取失败 + 随后出现 403」。修复方式是让
+  `adoptQuarantine` 只在成功提交时生效，或把隔离状态一并纳入回滚。
 - 仅支持 `key` 类型凭据，不支持 OAuth。
 
 ## 12. 参考
