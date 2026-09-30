@@ -1231,11 +1231,19 @@ function harness(config: {
 
   return {
     ctx: ctx as unknown as RegistrySlice,
+    deps: {
+      // Never fall back to the real network: a test that forgets `fetch` must fail loudly
+      // rather than call the live gateway with a fake bearer token.
+      fetch:
+        config.fetch ??
+        (() => {
+          throw new Error("test harness: unexpected fetch")
+        }),
+    },
     added,
     edits,
     storage,
     reloads,
-    fetch: config.fetch,
   }
 }
 
@@ -1249,7 +1257,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 describe("createRegistry", () => {
   it("installs with no saved quarantine", async () => {
     const h = harness({ connection: CONNECTION, credential: CREDENTIAL })
-    const registry = createRegistry(h.ctx, resolveOptions({}))
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
 
     await expect(registry.install()).resolves.toBeUndefined()
     await h.ctx.model.reload()
@@ -1259,7 +1267,7 @@ describe("createRegistry", () => {
 
   it("reports not-connected and publishes no provider when there is no credential", async () => {
     const h = harness({})
-    const registry = createRegistry(h.ctx, resolveOptions({}))
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
     await registry.install()
 
     await expect(registry.refresh()).resolves.toEqual({ status: "not-connected" })
@@ -1271,7 +1279,7 @@ describe("createRegistry", () => {
       connection: CONNECTION,
       credential: { type: "oauth", methodID: "m", refresh: "r", access: "a", expires: 0 } as unknown as Credential.Value,
     })
-    const registry = createRegistry(h.ctx, resolveOptions({}))
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
     await registry.install()
 
     await expect(registry.refresh()).resolves.toEqual({ status: "not-connected" })
@@ -1283,7 +1291,7 @@ describe("createRegistry", () => {
       credential: CREDENTIAL,
       fetch: (async () => jsonResponse(catalogue)) as unknown as typeof fetch,
     })
-    const registry = createRegistry(h.ctx, resolveOptions({}))
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
     await registry.install()
 
     await expect(registry.refresh()).resolves.toEqual({ status: "ok", count: 3 })
@@ -1325,6 +1333,7 @@ describe("createRegistry", () => {
     const registry = createRegistry(
       h.ctx,
       resolveOptions({ baseURL: "https://x.test/v1/", headers: { "x-tenant": "eng" } }),
+      h.deps,
     )
     await registry.install()
     await registry.refresh()
@@ -1344,7 +1353,7 @@ describe("createRegistry", () => {
       credential: CREDENTIAL,
       fetch: (async () => (fail ? jsonResponse({ error: "boom" }, 502) : jsonResponse(catalogue))) as unknown as typeof fetch,
     })
-    const registry = createRegistry(h.ctx, resolveOptions({}))
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
     await registry.install()
     await registry.refresh()
 
@@ -1363,7 +1372,7 @@ describe("createRegistry", () => {
       credential: CREDENTIAL,
       fetch: (async () => payload) as unknown as typeof fetch,
     })
-    const registry = createRegistry(h.ctx, resolveOptions({}))
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
     await registry.install()
     await registry.refresh()
 
@@ -1379,7 +1388,7 @@ describe("createRegistry", () => {
       credential: CREDENTIAL,
       fetch: (async () => payload) as unknown as typeof fetch,
     })
-    const registry = createRegistry(h.ctx, resolveOptions({}))
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
     await registry.install()
     await registry.refresh()
 
@@ -1395,7 +1404,7 @@ describe("createRegistry", () => {
       credential: CREDENTIAL,
       fetch: (async () => jsonResponse(catalogue)) as unknown as typeof fetch,
     })
-    const registry = createRegistry(h.ctx, resolveOptions({}))
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
     await registry.install()
     await registry.refresh()
     await registry.refresh()
@@ -1416,7 +1425,7 @@ describe("createRegistry", () => {
     ;(h.ctx as unknown as { integration: { connection: { active: () => Promise<Connection.Info | undefined> } } })
       .integration.connection.active = async () => connection
 
-    const registry = createRegistry(h.ctx, resolveOptions({}))
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
     await registry.install()
     await registry.refresh()
     expect(h.added).toHaveLength(1)
@@ -1432,7 +1441,7 @@ describe("createRegistry", () => {
       credential: CREDENTIAL,
       fetch: (async () => jsonResponse(catalogue)) as unknown as typeof fetch,
     })
-    const registry = createRegistry(h.ctx, resolveOptions({}))
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
     await registry.install()
     await registry.refresh()
 
@@ -1452,7 +1461,7 @@ describe("createRegistry", () => {
       await original(key, value)
     }
 
-    const registry = createRegistry(h.ctx, resolveOptions({}))
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
     await registry.install()
 
     await expect(registry.quarantine("gpt-6.1-sol")).resolves.toBe(true)
@@ -1463,7 +1472,7 @@ describe("createRegistry", () => {
   it("restores a saved quarantine on install", async () => {
     const h = harness({ connection: CONNECTION, credential: CREDENTIAL })
     h.storage.set(STORAGE_KEY, ["cm/claude-opus-4-8"])
-    const registry = createRegistry(h.ctx, resolveOptions({}))
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
     await registry.install()
 
     expect(registry.quarantined()).toEqual(["cm/claude-opus-4-8"])
@@ -1473,7 +1482,7 @@ describe("createRegistry", () => {
   it("ignores a malformed saved quarantine", async () => {
     const h = harness({ connection: CONNECTION, credential: CREDENTIAL })
     h.storage.set(STORAGE_KEY, "not an array")
-    const registry = createRegistry(h.ctx, resolveOptions({}))
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
     await registry.install()
 
     expect(registry.quarantined()).toEqual([])
@@ -1492,7 +1501,7 @@ Expected: FAIL — cannot resolve `../src/registry.js`.
 Create `src/registry.ts`:
 
 ```ts
-import { Integration, Provider, type Connection, type Plugin } from "@opencode/plugin"
+import { Integration, Provider, type Plugin } from "@opencode/plugin"
 import {
   PACKAGE_CHAT,
   parseGatewayModels,
@@ -1511,6 +1520,15 @@ export type RegistrySlice = {
   readonly model: Pick<Plugin.Context["model"], "transform" | "reload">
   readonly storage: Pick<Plugin.Context["storage"], "get" | "set">
 }
+
+/**
+ * `connection.active` returns the client's `ConnectionInfo`, not the schema's branded
+ * `Connection.Info`. Derive it from the slice rather than importing the client package,
+ * which is only a transitive dependency.
+ */
+type ActiveConnection = NonNullable<
+  Awaited<ReturnType<RegistrySlice["integration"]["connection"]["active"]>>
+>
 
 export type RegistryDeps = {
   readonly fetch: typeof fetch
@@ -1534,7 +1552,7 @@ export interface Registry {
 async function readCredential(
   ctx: RegistrySlice,
   providerID: string,
-): Promise<{ connection: Connection.Info; key: string } | undefined> {
+): Promise<{ connection: ActiveConnection; key: string } | undefined> {
   const connection = await ctx.integration.connection.active(providerID)
   if (!connection) return undefined
   const value = await ctx.integration.connection.resolve(connection)
@@ -1554,14 +1572,14 @@ export function createRegistry(
   // State captured by the transforms. Refreshing mutates it and then reloads, which
   // replays the callbacks below onto a fresh value.
   const state: {
-    connection?: Connection.Info
+    connection?: ActiveConnection
     apiKey?: string
     models: readonly GatewayModel[]
   } = { models: [] }
 
   const quarantine = new Quarantine()
 
-  function providerInfo(connection: Connection.Info, apiKey: string): Provider.Info {
+  function providerInfo(connection: ActiveConnection, apiKey: string): Provider.Info {
     return {
       ...Provider.Info.empty(providerID),
       name: options.displayName,
@@ -1596,6 +1614,9 @@ export function createRegistry(
     await ctx.provider.transform((editor) => {
       const { connection, apiKey } = state
       if (!connection || apiKey === undefined) return
+      // An empty catalogue is a successful refresh that clears the list: publish no
+      // provider rather than one with zero models.
+      if (state.models.length === 0) return
       editor.add({
         info: providerInfo(connection, apiKey),
         models: toModelInfoList(state.models, providerID, options),
@@ -1617,7 +1638,7 @@ export function createRegistry(
   }
 
   async function refresh(): Promise<RefreshResult> {
-    let credential: { connection: Connection.Info; key: string } | undefined
+    let credential: { connection: ActiveConnection; key: string } | undefined
     try {
       credential = await readCredential(ctx, options.providerID)
     } catch (error) {

@@ -196,7 +196,7 @@ export function packageFor(endpoints: readonly string[] = []): string {
 `responses` 优先是需求方明确选择。若某模型在网关上的 `/responses` 行为异常，
 可通过 options 的 `overrides.<id>.package` 回退到 chat。
 
-### 4.2 三层不变量
+### 4.2 四条不变量
 
 1. **`sourceConnection` 必需**。仅设 `integrationID` 不够。文档语义：设置了
    `sourceConnection` 的 provider，在选中其他凭据期间会被排除，直到插件 publish
@@ -205,6 +205,10 @@ export function packageFor(endpoints: readonly string[] = []): string {
    实现上 `refresh()` 只在成功时替换内存状态。
 3. **未连接时 `activation: "auto"`**，provider 不出现在 `/models`，避免 86 个
    不可用模型污染列表。
+4. **注册 provider 需要三个条件同时成立**：已连接、已解析出凭据、模型清单非空。
+   空清单（`data: []`）是一次**成功**刷新，返回 `{status:"ok",count:0}` 并清空
+   模型列表；此时不注册 provider，而不是注册一个零模型的 provider——后者会在
+   `/models` 里暴露一个无法服务的条目。这条与「连接消失则移除 provider」保持对称。
 
 ## 5. 数据映射
 
