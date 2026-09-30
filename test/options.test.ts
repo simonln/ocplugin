@@ -12,6 +12,8 @@ describe("resolveOptions", () => {
 
   it("clamps a too-small refreshInterval up to the minimum", () => {
     expect(resolveOptions({ refreshInterval: 5 }).refreshInterval).toBe(MIN_REFRESH_INTERVAL)
+    expect(resolveOptions({ refreshInterval: 0.5 }).refreshInterval).toBe(MIN_REFRESH_INTERVAL)
+    expect(resolveOptions({ refreshInterval: 0 }).refreshInterval).toBe(DEFAULTS.refreshInterval)
   })
 
   it("falls back for a non-positive or non-finite refreshInterval", () => {
@@ -28,6 +30,8 @@ describe("resolveOptions", () => {
   it("falls back for a blank baseURL or displayName", () => {
     expect(resolveOptions({ baseURL: "   " }).baseURL).toBe(DEFAULTS.baseURL)
     expect(resolveOptions({ displayName: "" }).displayName).toBe(DEFAULTS.displayName)
+    expect(resolveOptions({ baseURL: "/" }).baseURL).toBe(DEFAULTS.baseURL)
+    expect(resolveOptions({ baseURL: "///" }).baseURL).toBe(DEFAULTS.baseURL)
   })
 
   it("rejects a providerID containing a slash or a hash", () => {

@@ -47,6 +47,7 @@ function harness(config: {
   readonly connection?: Connection.Info
   readonly credential?: Credential.Value
   readonly fetch?: typeof fetch
+  readonly providerReload?: () => Promise<void>
 }) {
   const providerCallbacks: Array<(editor: unknown) => void> = []
   const modelCallbacks: Array<(editor: unknown) => void> = []
@@ -68,6 +69,7 @@ function harness(config: {
         return { dispose: async () => {} }
       },
       reload: async () => {
+        if (config.providerReload) await config.providerReload()
         reloads.provider += 1
         added.length = 0
         const editor = {
@@ -114,7 +116,13 @@ function harness(config: {
 
   return {
     ctx: ctx as unknown as RegistrySlice,
-    deps: { fetch: config.fetch ?? globalThis.fetch },
+    deps: {
+      fetch:
+        config.fetch ??
+        (async () => {
+          throw new Error("test harness: unexpected fetch")
+        }),
+    },
     added,
     edits,
     storage,
@@ -256,6 +264,25 @@ describe("createRegistry", () => {
     expect(registry.current()).toHaveLength(3)
   })
 
+  it.each([{}, { data: "nope" }, null])(
+    "keeps the last good catalogue when a 200 response has malformed envelope %#",
+    async (body) => {
+      let payload: Response = jsonResponse(catalogue)
+      const h = harness({
+        connection: CONNECTION,
+        credential: CREDENTIAL,
+        fetch: (async () => payload) as unknown as typeof fetch,
+      })
+      const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+      await registry.install()
+      await registry.refresh()
+
+      payload = jsonResponse(body)
+      await expect(registry.refresh()).resolves.toMatchObject({ status: "failed" })
+      expect(registry.current()).toHaveLength(3)
+    },
+  )
+
   it("treats an empty catalogue as a successful empty refresh", async () => {
     let payload: Response = jsonResponse(catalogue)
     const h = harness({
@@ -287,6 +314,53 @@ describe("createRegistry", () => {
 
     expect(h.reloads.provider).toBe(3)
     expect(h.added).toHaveLength(1)
+  })
+
+  it("serializes refreshes and resolves each credential at the start of its turn", async () => {
+    const order: string[] = []
+    let credentialNumber = 0
+    const h = harness({
+      connection: CONNECTION,
+      credential: CREDENTIAL,
+      fetch: (async (_url: string, init: RequestInit) => {
+        const authorization = (init.headers as Record<string, string>).authorization ?? ""
+        order.push(`start:${authorization}`)
+        await new Promise((resolve) => setTimeout(resolve, authorization.endsWith("first") ? 20 : 0))
+        order.push(`finish:${authorization}`)
+        return jsonResponse({ data: [{ id: authorization.endsWith("first") ? "first" : "second" }] })
+      }) as unknown as typeof fetch,
+    })
+    ;(h.ctx as unknown as { integration: { connection: { resolve: () => Promise<Credential.Value> } } })
+      .integration.connection.resolve = async () => ({
+        type: "key",
+        key: ++credentialNumber === 1 ? "first" : "second",
+      }) as Credential.Value
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+    await registry.install()
+    credentialNumber = 0
+
+    const first = registry.refresh()
+    const second = registry.refresh()
+    await Promise.all([first, second])
+
+    expect(order).toEqual([
+      "start:Bearer first",
+      "finish:Bearer first",
+      "start:Bearer second",
+      "finish:Bearer second",
+    ])
+    expect(registry.current().map((model) => model.id)).toEqual(["second"])
+  })
+
+  it("normalizes a provider reload rejection into a failed refresh", async () => {
+    const h = harness({ providerReload: async () => { throw new Error("reload failed") } })
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+    await registry.install()
+
+    await expect(registry.refresh()).resolves.toMatchObject({
+      status: "failed",
+      error: { message: "reload failed" },
+    })
   })
 
   it("drops the provider when the connection disappears", async () => {
@@ -322,7 +396,10 @@ describe("createRegistry", () => {
 
     await expect(registry.quarantine("gpt-6.1-sol")).resolves.toBe(true)
     expect(registry.quarantined()).toEqual(["cm/gpt-6.1-sol"])
-    expect(h.storage.get(STORAGE_KEY)).toEqual(["cm/gpt-6.1-sol"])
+    expect(h.storage.get(STORAGE_KEY)).toEqual({
+      credential: "credential:cred_1",
+      keys: ["cm/gpt-6.1-sol"],
+    })
     expect(h.edits).toEqual([{ providerID: "cm", modelID: "gpt-6.1-sol", enabled: false }])
   })
 
@@ -344,14 +421,57 @@ describe("createRegistry", () => {
     expect(writes).toBe(1)
   })
 
-  it("restores a saved quarantine on install", async () => {
+  it("restores a saved quarantine with a matching credential identity on install", async () => {
     const h = harness({ connection: CONNECTION, credential: CREDENTIAL })
-    h.storage.set(STORAGE_KEY, ["cm/claude-opus-4-8"])
+    h.storage.set(STORAGE_KEY, {
+      credential: "credential:cred_1",
+      keys: ["cm/claude-opus-4-8"],
+    })
     const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
     await registry.install()
 
     expect(registry.quarantined()).toEqual(["cm/claude-opus-4-8"])
     expect(h.edits).toEqual([{ providerID: "cm", modelID: "claude-opus-4-8", enabled: false }])
+  })
+
+  it("does not restore a saved quarantine from a different credential", async () => {
+    const h = harness({ connection: CONNECTION, credential: CREDENTIAL })
+    h.storage.set(STORAGE_KEY, {
+      credential: "credential:other",
+      keys: ["cm/claude-opus-4-8"],
+    })
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+    await registry.install()
+
+    expect(registry.quarantined()).toEqual([])
+    expect(h.edits).toEqual([])
+  })
+
+  it("ignores a legacy bare-array saved quarantine", async () => {
+    const h = harness({ connection: CONNECTION, credential: CREDENTIAL })
+    h.storage.set(STORAGE_KEY, ["cm/claude-opus-4-8"])
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+
+    await expect(registry.install()).resolves.toBeUndefined()
+    expect(registry.quarantined()).toEqual([])
+    expect(h.edits).toEqual([])
+  })
+
+  it("does not restore quarantine when quarantineOnAuthFailure is false", async () => {
+    const h = harness({ connection: CONNECTION, credential: CREDENTIAL })
+    h.storage.set(STORAGE_KEY, {
+      credential: "credential:cred_1",
+      keys: ["cm/claude-opus-4-8"],
+    })
+    const registry = createRegistry(
+      h.ctx,
+      resolveOptions({ quarantineOnAuthFailure: false }),
+      h.deps,
+    )
+    await registry.install()
+
+    expect(registry.quarantined()).toEqual([])
+    expect(h.edits).toEqual([])
   })
 
   it("ignores a malformed saved quarantine", async () => {

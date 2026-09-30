@@ -56,8 +56,8 @@ function positiveInt(value: unknown, fallback: number): number {
  */
 function clampedInterval(value: unknown, fallback: number, floor: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback
+  if (value <= 0) return fallback
   const floored = Math.floor(value)
-  if (floored <= 0) return fallback
   return Math.max(floored, floor)
 }
 
@@ -113,8 +113,10 @@ export function resolveOptions(raw: unknown): Options {
     )
   }
 
+  const strippedBaseURL = nonEmptyString(input.baseURL, DEFAULTS.baseURL).replace(/\/+$/, "")
+
   return {
-    baseURL: nonEmptyString(input.baseURL, DEFAULTS.baseURL).replace(/\/+$/, ""),
+    baseURL: strippedBaseURL || DEFAULTS.baseURL,
     providerID,
     displayName: nonEmptyString(input.displayName, DEFAULTS.displayName),
     refreshInterval: clampedInterval(

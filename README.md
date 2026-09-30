@@ -15,7 +15,7 @@ automatically, and keeps the API key in OpenCode's credential store instead of
 - Reads `context_length` per model, so context limits never need hand-tuning.
 - Stores the API key via `/connect` in OpenCode's credential store.
 - Hides models the account is not entitled to. The catalogue does not report
-  entitlements, so a model that answers 401/403 is quarantined after its first failure
+  entitlements, so a model that answers 403 is quarantined after its first failure
   and disappears from `/models`.
 - Keeps the last good catalogue when the gateway is temporarily unreachable.
 
@@ -50,7 +50,7 @@ Pass options through the object form of the `plugins` entry:
 {
   "plugins": [
     {
-      "package": "file:///D:/code/repos/opencode-cm-provider",
+      "package": "file:///D:/code/repos/ocplugin",
       "options": {
         "refreshInterval": 600000,
       },
@@ -67,11 +67,11 @@ Pass options through the object form of the `plugins` entry:
 | `refreshInterval` | `600000` | Catalog refresh in milliseconds. Minimum `10000`. |
 | `defaultOutput` | `32000` | Output token limit, since the gateway does not report one. |
 | `defaultContext` | `200000` | Context limit fallback when the gateway omits `context_length`. |
-| `requestTimeout` | `15000` | `GET /models` timeout in milliseconds. |
+| `requestTimeout` | `15000` | `GET /models` timeout in milliseconds. Minimum `1000`. |
 | `headers` | `{}` | Extra provider request headers. |
 | `body` | `{}` | Extra provider request body fields. |
 | `overrides` | `{}` | Per-model corrections, keyed by model ID. |
-| `quarantineOnAuthFailure` | `true` | Hide models that answer 401/403. |
+| `quarantineOnAuthFailure` | `true` | Hide models that answer 403. |
 
 ### Per-model overrides
 
@@ -79,7 +79,7 @@ Pass options through the object form of the `plugins` entry:
 {
   "plugins": [
     {
-      "package": "file:///D:/code/repos/opencode-cm-provider",
+      "package": "file:///D:/code/repos/ocplugin",
       "options": {
         "overrides": {
           "gpt-5.4-mini": { "output": 64000 },

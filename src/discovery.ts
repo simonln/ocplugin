@@ -59,9 +59,11 @@ export function parseGatewayModels(payload: unknown): GatewayModel[] {
     models.push({
       id: record.id,
       ...(typeof record.name === "string" && record.name !== "" ? { name: record.name } : {}),
-      ...(typeof record.context_length === "number" && Number.isFinite(record.context_length)
-        ? { context_length: Math.floor(record.context_length) }
-        : {}),
+      ...(typeof record.context_length === "number" &&
+      Number.isFinite(record.context_length) &&
+      record.context_length > 0
+          ? { context_length: Math.floor(record.context_length) }
+          : {}),
       ...(endpoints ? { supported_endpoints: endpoints } : {}),
     })
   }
@@ -86,7 +88,10 @@ export function toModelInfo(
   info.name = raw.name ?? raw.id
   info.package = packageFor(raw.supported_endpoints)
   info.limit = {
-    context: raw.context_length ?? options.defaultContext,
+    context:
+      raw.context_length !== undefined && raw.context_length > 0
+        ? raw.context_length
+        : options.defaultContext,
     output: options.defaultOutput,
   }
   applyOverride(info, options.overrides[raw.id])

@@ -217,6 +217,11 @@ describe("toModelInfo", () => {
     expect(model.package).toBe(PACKAGE_ANTHROPIC)
   })
 
+  it("falls back to the configured context for a non-positive gateway context length", () => {
+    expect(toModelInfo({ id: "bad", context_length: -1 }, PROVIDER_ID, options).limit.context)
+      .toBe(options.defaultContext)
+  })
+
   it("applies each override field on top of the gateway mapping", () => {
     const configured = resolveOptions({
       defaultContext: 1000,

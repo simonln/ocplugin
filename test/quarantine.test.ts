@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { Quarantine, parseQuarantine } from "../src/quarantine.js"
+import { isQuarantineStatus, Quarantine, parseQuarantine } from "../src/quarantine.js"
+
+describe("isQuarantineStatus", () => {
+  it("accepts only HTTP 403", () => {
+    expect(isQuarantineStatus(403)).toBe(true)
+    for (const status of [401, 400, 500, 0, 404]) expect(isQuarantineStatus(status)).toBe(false)
+  })
+})
 
 describe("Quarantine.keyOf", () => {
   it("joins provider and model with a slash", () => {
@@ -52,14 +59,16 @@ describe("Quarantine", () => {
 })
 
 describe("parseQuarantine", () => {
-  it("returns an empty list for anything that is not an array of non-empty strings", () => {
-    expect(parseQuarantine(undefined)).toEqual([])
-    expect(parseQuarantine(null)).toEqual([])
-    expect(parseQuarantine("nope")).toEqual([])
-    expect(parseQuarantine({})).toEqual([])
+  it("returns undefined for unrecognised persisted values", () => {
+    expect(parseQuarantine(undefined)).toBeUndefined()
+    expect(parseQuarantine(null)).toBeUndefined()
+    expect(parseQuarantine("nope")).toBeUndefined()
+    expect(parseQuarantine({})).toBeUndefined()
+    expect(parseQuarantine(["cm/legacy"])).toBeUndefined()
   })
 
-  it("keeps only non-empty strings", () => {
-    expect(parseQuarantine(["cm/a", "", 3, null, "cm/b"])).toEqual(["cm/a", "cm/b"])
+  it("parses a credential identity and keeps only non-empty string keys", () => {
+    expect(parseQuarantine({ credential: "credential:1", keys: ["cm/a", "", 3, null, "cm/b"] }))
+      .toEqual({ credential: "credential:1", keys: ["cm/a", "cm/b"] })
   })
 })

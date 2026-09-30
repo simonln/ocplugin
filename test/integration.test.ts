@@ -55,7 +55,12 @@ describe("registerIntegration", () => {
     expect(method.type).toBe("key")
     expect(method.label).toBe("API Key")
     expect(method.form).toHaveLength(1)
-    expect(method.form?.[0]).toMatchObject({ type: "string", key: "apiKey", required: true })
+    expect(method.form?.[0]).toMatchObject({
+      type: "string",
+      key: "apiKey",
+      required: true,
+      hidden: true,
+    })
   })
 
   it("honours a custom providerID and displayName", async () => {

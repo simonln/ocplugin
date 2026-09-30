@@ -75,6 +75,26 @@ export function createRegistry(
   } = { models: [] }
 
   const quarantine = new Quarantine()
+  let storedQuarantine: ReturnType<typeof parseQuarantine>
+  let quarantineCredential: string | undefined
+  let refreshChain: Promise<void> = Promise.resolve()
+
+  function credentialIdentity(connection: ActiveConnection): string {
+    switch (connection.type) {
+      case "credential":
+        return `credential:${connection.id}`
+      case "env":
+        return `env:${connection.name}`
+    }
+  }
+
+  function adoptQuarantine(connection: ActiveConnection): void {
+    if (!options.quarantineOnAuthFailure) return
+    const identity = credentialIdentity(connection)
+    if (identity === quarantineCredential) return
+    quarantineCredential = identity
+    quarantine.replace(storedQuarantine?.credential === identity ? storedQuarantine.keys : [])
+  }
 
   function providerInfo(connection: ActiveConnection, apiKey: string): Provider.Info {
     return {
@@ -101,12 +121,28 @@ export function createRegistry(
     if (!response.ok) {
       throw new Error(`GET ${options.baseURL}/models failed with HTTP ${response.status}`)
     }
-    return await response.json()
+    const payload: unknown = await response.json()
+    if (
+      typeof payload !== "object" ||
+      payload === null ||
+      Array.isArray(payload) ||
+      !Array.isArray((payload as { data?: unknown }).data)
+    ) {
+      throw new Error(`GET ${options.baseURL}/models returned a malformed catalogue`)
+    }
+    return payload
   }
 
   async function install(): Promise<void> {
-    const saved = parseQuarantine(await ctx.storage.get(STORAGE_KEY))
-    for (const key of saved) quarantine.add(key)
+    if (options.quarantineOnAuthFailure) {
+      storedQuarantine = parseQuarantine(await ctx.storage.get(STORAGE_KEY))
+      try {
+        const credential = await readCredential(ctx, options.providerID)
+        if (credential) adoptQuarantine(credential.connection)
+      } catch {
+        // Initial refresh reports credential-resolution failures without making setup fail.
+      }
+    }
 
     await ctx.provider.transform((editor) => {
       const { connection, apiKey } = state
@@ -122,6 +158,7 @@ export function createRegistry(
     })
 
     await ctx.model.transform((editor) => {
+      if (!options.quarantineOnAuthFailure) return
       for (const key of quarantine.list()) {
         if (!key.startsWith(prefix)) continue
         editor.update(options.providerID, key.slice(prefix.length), (model) => {
@@ -134,23 +171,22 @@ export function createRegistry(
     await ctx.model.reload()
   }
 
-  async function refresh(): Promise<RefreshResult> {
-    let credential: { connection: ActiveConnection; key: string } | undefined
+  async function runRefresh(): Promise<RefreshResult> {
+    const previous = { ...state }
     try {
-      credential = await readCredential(ctx, options.providerID)
-    } catch (error) {
-      return { status: "failed", error: toError(error) }
-    }
+      const credential = await readCredential(ctx, options.providerID)
 
-    if (!credential) {
-      state.connection = undefined
-      state.apiKey = undefined
-      state.models = []
-      await ctx.provider.reload()
-      return { status: "not-connected" }
-    }
+      if (!credential) {
+        state.connection = undefined
+        state.apiKey = undefined
+        state.models = []
+        quarantineCredential = undefined
+        quarantine.replace([])
+        await ctx.provider.reload()
+        return { status: "not-connected" }
+      }
 
-    try {
+      adoptQuarantine(credential.connection)
       const models = parseGatewayModels(await fetchCatalogue(credential.key))
       state.connection = credential.connection
       state.apiKey = credential.key
@@ -158,15 +194,30 @@ export function createRegistry(
       await ctx.provider.reload()
       return { status: "ok", count: models.length }
     } catch (error) {
-      // Deliberately leave captured state untouched: a transient gateway failure must
-      // not empty the user's model list.
+      state.connection = previous.connection
+      state.apiKey = previous.apiKey
+      state.models = previous.models
       return { status: "failed", error: toError(error) }
     }
   }
 
+  function refresh(): Promise<RefreshResult> {
+    const result = refreshChain.then(runRefresh, runRefresh)
+    refreshChain = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+
   async function quarantineModel(modelID: string): Promise<boolean> {
+    if (!options.quarantineOnAuthFailure || !quarantineCredential) return false
     if (!quarantine.add(Quarantine.keyOf(options.providerID, modelID))) return false
-    await ctx.storage.set(STORAGE_KEY, quarantine.list())
+    storedQuarantine = { credential: quarantineCredential, keys: quarantine.list() }
+    await ctx.storage.set(STORAGE_KEY, {
+      credential: storedQuarantine.credential,
+      keys: [...storedQuarantine.keys],
+    })
     await ctx.model.reload()
     return true
   }
