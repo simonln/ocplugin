@@ -734,13 +734,20 @@ export function parseGatewayModels(payload: unknown): GatewayModel[] {
   return models
 }
 
-function applyOverride(info: Model.Info, override: ModelOverride | undefined): void {
+/**
+ * The SDK models `Model.Info` fields as readonly, but registration-time edits are the
+ * intended usage, so a shallow mutable view is all that is needed. A recursive variant
+ * (like the SDK's `DeepMutable`) would corrupt its branded string fields.
+ */
+type Mutable<T> = { -readonly [K in keyof T]: T[K] }
+
+function applyOverride(info: Mutable<Model.Info>, override: ModelOverride | undefined): void {
   if (!override) return
   if (override.name !== undefined) info.name = override.name
   if (override.package !== undefined) info.package = override.package
   if (override.enabled !== undefined) info.enabled = override.enabled
-  if (override.context !== undefined) info.limit.context = override.context
-  if (override.output !== undefined) info.limit.output = override.output
+  if (override.context !== undefined) info.limit = { ...info.limit, context: override.context }
+  if (override.output !== undefined) info.limit = { ...info.limit, output: override.output }
 }
 
 export function toModelInfo(
@@ -748,7 +755,7 @@ export function toModelInfo(
   providerID: Provider.ID,
   options: RangeOptions,
 ): Model.Info {
-  const info = Model.Info.default(providerID, Model.ID.make(raw.id))
+  const info: Mutable<Model.Info> = Model.Info.default(providerID, Model.ID.make(raw.id))
   info.name = raw.name ?? raw.id
   info.package = packageFor(raw.supported_endpoints)
   info.limit = {
