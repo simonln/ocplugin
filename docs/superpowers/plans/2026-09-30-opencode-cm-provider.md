@@ -15,7 +15,7 @@
 - Package is ESM: `"type": "module"` in `package.json`. Relative imports MUST carry a `.js` extension (NodeNext). Verified: Vitest 5.0.3 resolves `./x.js` to `x.ts` when `resolve.extensions` lists `.ts` first.
 - `@opencode/plugin` is the only runtime dependency; pin `^2.0.20`. Import `Model`, `Provider`, `Integration`, `Connection`, `Credential`, `Plugin` from the package root.
 - Defaults, verbatim from the spec: `baseURL` `https://api.commandcode.ai/provider/v1`, `providerID` `cm`, `displayName` `Command Code`, `refreshInterval` `600000`, `defaultOutput` `32000`, `defaultContext` `200000`, `requestTimeout` `15000`, `quarantineOnAuthFailure` `true`.
-- Minimum accepted `refreshInterval` is `10000` ms; minimum accepted `requestTimeout` is `1000` ms.
+- `refreshInterval` and `requestTimeout` clamp up to their floors; a non-positive or non-finite value falls back to the default. `refreshInterval` floor `10000` ms, `requestTimeout` floor `1000` ms. The other numeric options fall back to their defaults on anything that is not a positive finite number.
 - `providerID` MUST NOT contain `/` or `#`. Both would break `Model.Ref.parse`, which splits on the first `/` and treats `#` as the variant separator.
 - Model IDs are used verbatim as both `id` and `modelID`. Never slugify, lowercase, or replace `/`. Verified: `Model.Ref.parse("cm/deepseek/deepseek-v4.1-flash")` yields `{ providerID: "cm", id: "deepseek/deepseek-v4.1-flash" }`.
 - Drop any model ID containing `#`, since `#` would be parsed as a variant separator and silently truncate the ID.
@@ -277,10 +277,22 @@ function plainRecord(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>
 }
 
-function positiveInt(value: unknown, fallback: number, minimum = 1): number {
+function positiveInt(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback
   const floored = Math.floor(value)
-  return floored >= minimum ? floored : fallback
+  return floored >= 1 ? floored : fallback
+}
+
+/**
+ * A positive value below the floor clamps up to it, because the floor exists to
+ * protect the gateway rather than to reject a user who asked for something faster.
+ * A non-positive or non-finite value is nonsense and takes the default.
+ */
+function clampedInterval(value: unknown, fallback: number, floor: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback
+  const floored = Math.floor(value)
+  if (floored <= 0) return fallback
+  return Math.max(floored, floor)
 }
 
 function nonEmptyString(value: unknown, fallback: string): string {
@@ -339,14 +351,14 @@ export function resolveOptions(raw: unknown): Options {
     baseURL: nonEmptyString(input.baseURL, DEFAULTS.baseURL).replace(/\/+$/, ""),
     providerID,
     displayName: nonEmptyString(input.displayName, DEFAULTS.displayName),
-    refreshInterval: positiveInt(
+    refreshInterval: clampedInterval(
       input.refreshInterval,
       DEFAULTS.refreshInterval,
       MIN_REFRESH_INTERVAL,
     ),
     defaultOutput: positiveInt(input.defaultOutput, DEFAULTS.defaultOutput),
     defaultContext: positiveInt(input.defaultContext, DEFAULTS.defaultContext),
-    requestTimeout: positiveInt(input.requestTimeout, DEFAULTS.requestTimeout, 1_000),
+    requestTimeout: clampedInterval(input.requestTimeout, DEFAULTS.requestTimeout, 1_000),
     headers: stringRecord(input.headers),
     body: plainRecord(input.body) ?? {},
     overrides: parseOverrides(input.overrides),
@@ -495,10 +507,19 @@ describe("packageFor", () => {
       "claude-opus-4-7",
       "claude-haiku-4-5-20251001",
     ]
-    for (const id of claude) {
-      expect(packageFor(["/messages"])).toBe(PACKAGE_ANTHROPIC)
-      expect(id).not.toContain("#")
-    }
+    const discovered = parseGatewayModels({
+      data: claude.map((id) => ({
+        id,
+        name: id,
+        context_length: 1000000,
+        supported_endpoints: ["/messages"],
+      })),
+    })
+    expect(discovered).toHaveLength(claude.length)
+
+    const mapped = toModelInfoList(discovered, PROVIDER_ID, options)
+    expect(mapped.map((model) => model.id)).toEqual(claude)
+    expect(mapped.map((model) => model.package)).toEqual(claude.map(() => PACKAGE_ANTHROPIC))
   })
 })
 
@@ -750,12 +771,12 @@ export function toModelInfoList(
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run test/discovery.test.ts`
-Expected: PASS, 20 tests.
+Expected: PASS, 21 tests.
 
 - [ ] **Step 5: Run the full suite and typecheck**
 
 Run: `npm test` then `npm run typecheck`
-Expected: PASS, 30 tests total.
+Expected: PASS, 31 tests total.
 
 - [ ] **Step 6: Commit**
 
@@ -1464,13 +1485,7 @@ Expected: FAIL — cannot resolve `../src/registry.js`.
 Create `src/registry.ts`:
 
 ```ts
-import {
-  Model,
-  Provider,
-  type Connection,
-  type Credential,
-  type Plugin,
-} from "@opencode/plugin"
+import { Integration, Provider, type Connection, type Plugin } from "@opencode/plugin"
 import {
   PACKAGE_CHAT,
   parseGatewayModels,
@@ -1526,7 +1541,7 @@ export function createRegistry(
   deps: RegistryDeps = { fetch: globalThis.fetch },
 ): Registry {
   const providerID = Provider.ID.make(options.providerID)
-  const integrationID = providerID
+  const integrationID = Integration.ID.make(options.providerID)
   const prefix = `${options.providerID}/`
 
   // State captured by the transforms. Refreshing mutates it and then reloads, which
@@ -1589,6 +1604,9 @@ export function createRegistry(
         })
       }
     })
+
+    // A restored quarantine must take effect at setup, not at the next unrelated reload.
+    await ctx.model.reload()
   }
 
   async function refresh(): Promise<RefreshResult> {
@@ -1650,7 +1668,7 @@ Expected: PASS, 14 tests.
 - [ ] **Step 5: Run the full suite and typecheck**
 
 Run: `npm test` then `npm run typecheck`
-Expected: PASS, 47 tests total.
+Expected: PASS, 57 tests total.
 
 - [ ] **Step 6: Commit**
 
@@ -1881,7 +1899,7 @@ npm run build
 - [ ] **Step 5: Run the full suite, build, and typecheck**
 
 Run: `npm test`, `npm run build`, `npm run typecheck`
-Expected: 47 tests pass; build and typecheck succeed.
+Expected: 57 tests pass; build and typecheck succeed.
 
 - [ ] **Step 6: Commit**
 
