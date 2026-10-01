@@ -12,7 +12,7 @@ import {
 } from "../src/discovery.js"
 import { resolveOptions } from "../src/options.js"
 
-const PROVIDER_ID = Provider.ID.make("cm")
+const PROVIDER_ID = Provider.ID.make("CommandCode")
 const options = resolveOptions({})
 
 /** Sample shaped exactly like the live gateway response, verified 2026-09-30. */

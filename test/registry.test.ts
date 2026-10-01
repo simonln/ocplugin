@@ -182,9 +182,9 @@ describe("createRegistry", () => {
 
     const record = h.added[0]
     expect(record?.sourceConnection).toBe(CONNECTION)
-    expect(record?.info.id).toBe("cm")
+    expect(record?.info.id).toBe("CommandCode")
     expect(record?.info.activation).toBe("auto")
-    expect(record?.info.integrationID).toBe("cm")
+    expect(record?.info.integrationID).toBe("CommandCode")
     expect(record?.info.name).toBe("Command Code")
     expect(record?.info.package).toBe(PACKAGE_CHAT)
     expect(record?.info.settings).toMatchObject({
@@ -395,12 +395,12 @@ describe("createRegistry", () => {
     await registry.refresh()
 
     await expect(registry.quarantine("gpt-6.1-sol")).resolves.toBe(true)
-    expect(registry.quarantined()).toEqual(["cm/gpt-6.1-sol"])
+    expect(registry.quarantined()).toEqual(["CommandCode/gpt-6.1-sol"])
     expect(h.storage.get(STORAGE_KEY)).toEqual({
       credential: "credential:cred_1",
-      keys: ["cm/gpt-6.1-sol"],
+      keys: ["CommandCode/gpt-6.1-sol"],
     })
-    expect(h.edits).toEqual([{ providerID: "cm", modelID: "gpt-6.1-sol", enabled: false }])
+    expect(h.edits).toEqual([{ providerID: "CommandCode", modelID: "gpt-6.1-sol", enabled: false }])
   })
 
   it("writes storage only the first time a model is quarantined", async () => {
@@ -425,20 +425,20 @@ describe("createRegistry", () => {
     const h = harness({ connection: CONNECTION, credential: CREDENTIAL })
     h.storage.set(STORAGE_KEY, {
       credential: "credential:cred_1",
-      keys: ["cm/claude-opus-4-8"],
+      keys: ["CommandCode/claude-opus-4-8"],
     })
     const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
     await registry.install()
 
-    expect(registry.quarantined()).toEqual(["cm/claude-opus-4-8"])
-    expect(h.edits).toEqual([{ providerID: "cm", modelID: "claude-opus-4-8", enabled: false }])
+    expect(registry.quarantined()).toEqual(["CommandCode/claude-opus-4-8"])
+    expect(h.edits).toEqual([{ providerID: "CommandCode", modelID: "claude-opus-4-8", enabled: false }])
   })
 
   it("does not restore a saved quarantine from a different credential", async () => {
     const h = harness({ connection: CONNECTION, credential: CREDENTIAL })
     h.storage.set(STORAGE_KEY, {
       credential: "credential:other",
-      keys: ["cm/claude-opus-4-8"],
+      keys: ["CommandCode/claude-opus-4-8"],
     })
     const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
     await registry.install()
@@ -449,7 +449,7 @@ describe("createRegistry", () => {
 
   it("ignores a legacy bare-array saved quarantine", async () => {
     const h = harness({ connection: CONNECTION, credential: CREDENTIAL })
-    h.storage.set(STORAGE_KEY, ["cm/claude-opus-4-8"])
+    h.storage.set(STORAGE_KEY, ["CommandCode/claude-opus-4-8"])
     const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
 
     await expect(registry.install()).resolves.toBeUndefined()
@@ -461,7 +461,7 @@ describe("createRegistry", () => {
     const h = harness({ connection: CONNECTION, credential: CREDENTIAL })
     h.storage.set(STORAGE_KEY, {
       credential: "credential:cred_1",
-      keys: ["cm/claude-opus-4-8"],
+      keys: ["CommandCode/claude-opus-4-8"],
     })
     const registry = createRegistry(
       h.ctx,

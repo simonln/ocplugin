@@ -7,7 +7,7 @@ automatically, and keeps the API key in OpenCode's credential store instead of
 
 ## What it does
 
-- Registers a `cm` provider and pulls the model list from `GET {baseURL}/models` on
+- Registers the provider (default ID `CommandCode`) and pulls the model list from `GET {baseURL}/models` on
   startup, every 10 minutes, and whenever a credential changes.
 - Routes each model to the correct runtime from the gateway's `supported_endpoints`:
   `/responses` models use the OpenAI Responses runtime, chat-only models use the OpenAI
@@ -62,7 +62,7 @@ Pass options through the object form of the `plugins` entry:
 | Option | Default | Purpose |
 | --- | --- | --- |
 | `baseURL` | `https://api.commandcode.ai/provider/v1` | Gateway endpoint. Trailing slashes are stripped. |
-| `providerID` | `cm` | Provider ID. Must not contain `/` or `#`. |
+| `providerID` | `CommandCode` | Provider ID. Must not contain `/` or `#`. |
 | `displayName` | `Command Code` | Name shown in `/connect` and `/models`. |
 | `refreshInterval` | `600000` | Catalog refresh in milliseconds. Minimum `10000`. |
 | `defaultOutput` | `32000` | Output token limit, since the gateway does not report one. |

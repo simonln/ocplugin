@@ -26,7 +26,7 @@ export const MIN_REFRESH_INTERVAL = 10_000
 
 export const DEFAULTS: Options = {
   baseURL: "https://api.commandcode.ai/provider/v1",
-  providerID: "cm",
+  providerID: "CommandCode",
   displayName: "Command Code",
   refreshInterval: 600_000,
   defaultOutput: 32_000,
