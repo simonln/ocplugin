@@ -8,16 +8,24 @@ automatically, and keeps the API key in OpenCode's credential store instead of
 ## What it does
 
 - Registers the provider (default ID `CommandCode`) and pulls the model list from `GET {baseURL}/models` on
-  startup, every 10 minutes, and whenever a credential changes.
+  startup, when a credential changes, and when you switch models. No polling.
+- Fetches that list without credentials — the gateway serves it anonymously. The API key is
+  still resolved, because the provider needs it to serve real requests.
 - Routes each model to the correct runtime from the gateway's `supported_endpoints`:
   `/responses` models use the OpenAI Responses runtime, chat-only models use the OpenAI
   chat runtime, and the Anthropic-native Claude models use the Anthropic runtime.
-- Reads `context_length` per model, so context limits never need hand-tuning.
+- Reads `context_length` per model from the gateway, so context limits never need hand-tuning.
+- Fills in output limits and capabilities (image support, tool support) from
+  [models.dev](https://models.dev), which the gateway does not report. Matched models stop
+  defaulting to 32000 output tokens and stop claiming image support they do not have.
 - Stores the API key via `/connect` in OpenCode's credential store.
 - Hides models the account is not entitled to. The catalogue does not report
   entitlements, so a model that answers 403 is quarantined after its first failure
   and disappears from `/models`.
 - Keeps the last good catalogue when the gateway is temporarily unreachable.
+- Refreshes when you switch models, so a model added to the gateway shows up without
+  restarting the service. Note that this happens *after* a selection, so the `/models`
+  list itself still shows the catalogue as of the last refresh.
 
 ## Install
 
@@ -52,7 +60,7 @@ Pass options through the object form of the `plugins` entry:
     {
       "package": "file:///D:/code/repos/ocplugin",
       "options": {
-        "refreshInterval": 600000,
+        "defaultOutput": 32000,
       },
     },
   ],
@@ -64,8 +72,8 @@ Pass options through the object form of the `plugins` entry:
 | `baseURL` | `https://api.commandcode.ai/provider/v1` | Gateway endpoint. Trailing slashes are stripped. |
 | `providerID` | `CommandCode` | Provider ID. Must not contain `/` or `#`. |
 | `displayName` | `Command Code` | Name shown in `/connect` and `/models`. |
-| `refreshInterval` | `600000` | Catalog refresh in milliseconds. Minimum `10000`. |
-| `defaultOutput` | `32000` | Output token limit, since the gateway does not report one. |
+| `modelsDevURL` | `https://models.dev/api.json` | Source for output limits and capabilities. Set to `""` to disable. |
+| `defaultOutput` | `32000` | Output token limit when neither the gateway nor models.dev reports one. |
 | `defaultContext` | `200000` | Context limit fallback when the gateway omits `context_length`. |
 | `requestTimeout` | `15000` | `GET /models` timeout in milliseconds. Minimum `1000`. |
 | `headers` | `{}` | Extra provider request headers. |
@@ -96,11 +104,18 @@ Each override accepts `name`, `context`, `output`, `enabled`, and `package`.
 
 ## Known limitations
 
-- The gateway does not report output token limits, so every model defaults to
-  `defaultOutput` (32000). Raise it per model with `overrides`.
-- The gateway does not report capabilities, so every model is advertised as accepting
-  text and images with tool support. Sending an image to a text-only model fails with a
-  400 from the gateway; correct it with `overrides`.
+- models.dev lists 79 of the gateway's 86 models. The 8 it does not list fall back to
+  `defaultOutput` and to the optimistic default capabilities, so one of them may reject an
+  image with a 400. As of 2026-10-01 they are `deepseek/deepseek-v4-flash-fast`,
+  `tencent/hy3-paid`, `thinkingmachines/inkling-small`, `stealth/space-bunny-alpha`,
+  `stealth/pixel-canary`, `poolside/laguna-s-2.1-free`, and the two
+  `inclusionai/ling-*:free` entries. Correct any of them with `overrides`.
+- models.dev is downloaded once (5.3 MB) and reduced to just the fields the gateway's
+  catalogue needs, then cached. It is downloaded again only when the gateway adds a model
+  the cache does not cover. If models.dev is unreachable, enrichment is skipped and every
+  model falls back to the defaults.
+- The gateway's context length always wins over models.dev's, since it reflects what the
+  gateway will actually accept. models.dev only supplies a context when the gateway omits one.
 - The gateway reports no pricing, so costs are not shown.
 - The catalogue's `created` timestamp is identical for every model, so it is not used as
   a release date and models cannot be sorted by date.

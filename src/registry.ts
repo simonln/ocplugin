@@ -1,14 +1,26 @@
 import { Integration, Provider, type Plugin } from "@opencode/plugin"
+import type { Schema } from "effect"
 import {
   PACKAGE_CHAT,
   parseGatewayModels,
   toModelInfoList,
+  type FactsLookup,
   type GatewayModel,
 } from "./discovery.js"
+import {
+  enrichModels,
+  parseFactsCache,
+  serializeFactsCache,
+  type FactsIndex,
+} from "./modelsdev.js"
 import type { Options } from "./options.js"
 import { Quarantine, parseQuarantine } from "./quarantine.js"
 
 export const STORAGE_KEY = "quarantined"
+export const MODELS_DEV_STORAGE_KEY = "modelsdev"
+
+/** A 5.3 MB download needs more headroom than a catalogue request. */
+const MODELS_DEV_TIMEOUT = 60_000
 
 /** The slice of the plugin context this module needs. */
 export type RegistrySlice = {
@@ -72,7 +84,8 @@ export function createRegistry(
     connection?: ActiveConnection
     apiKey?: string
     models: readonly GatewayModel[]
-  } = { models: [] }
+    facts: FactsIndex
+  } = { models: [], facts: new Map() }
 
   const quarantine = new Quarantine()
   let storedQuarantine: ReturnType<typeof parseQuarantine>
@@ -109,11 +122,10 @@ export function createRegistry(
     }
   }
 
-  async function fetchCatalogue(apiKey: string): Promise<unknown> {
+  async function fetchCatalogue(): Promise<unknown> {
     const response = await deps.fetch(`${options.baseURL}/models`, {
       headers: {
         accept: "application/json",
-        authorization: `Bearer ${apiKey}`,
         ...options.headers,
       },
       signal: AbortSignal.timeout(options.requestTimeout),
@@ -152,7 +164,7 @@ export function createRegistry(
       if (state.models.length === 0) return
       editor.add({
         info: providerInfo(connection, apiKey),
-        models: toModelInfoList(state.models, providerID, options),
+        models: toModelInfoList(state.models, providerID, options, state.facts),
         sourceConnection: connection,
       })
     })
@@ -171,6 +183,67 @@ export function createRegistry(
     await ctx.model.reload()
   }
 
+  async function downloadFacts(models: readonly GatewayModel[]): Promise<FactsIndex> {
+    const response = await deps.fetch(options.modelsDevURL, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(MODELS_DEV_TIMEOUT),
+    })
+    if (!response.ok) {
+      throw new Error(`GET ${options.modelsDevURL} failed with HTTP ${response.status}`)
+    }
+    return enrichModels(models, (await response.json()) as unknown)
+  }
+
+  /**
+   * Returns facts for `models`, downloading models.dev only when the cache was not built
+   * from a catalogue already containing all of them. Enrichment is best-effort: a failure
+   * yields an empty index so the catalogue still publishes on the configured defaults.
+   */
+  async function resolveFacts(models: readonly GatewayModel[]): Promise<FactsIndex> {
+    if (options.modelsDevURL === "") return new Map()
+
+    const cache = parseFactsCache(await loadFactsCache())
+    // Coverage is recorded per catalogue rather than inferred from the facts present,
+    // because a model models.dev does not list gets no entry yet must not force a
+    // re-download on every refresh.
+    const ids = models.map((model) => model.id)
+    if (ids.every((id) => cache.covered.has(id))) return cache.facts
+
+    try {
+      const fetched = await downloadFacts(models)
+      await saveFactsCache(ids, fetched)
+      return fetched
+    } catch (error) {
+      console.error(
+        "[opencode-cm-provider] models.dev enrichment failed, using defaults",
+        toError(error),
+      )
+      return cache.facts
+    }
+  }
+
+  async function loadFactsCache(): Promise<unknown> {
+    try {
+      return await ctx.storage.get(MODELS_DEV_STORAGE_KEY)
+    } catch {
+      // Storage is best-effort; a read failure just means a re-download.
+      return undefined
+    }
+  }
+
+  async function saveFactsCache(covered: readonly string[], facts: FactsIndex): Promise<void> {
+    try {
+      // `ModelFacts` is readonly and holds readonly arrays, neither of which satisfies the
+      // storage schema's mutable `Json` shape, so the value is widened on the way out.
+      await ctx.storage.set(
+        MODELS_DEV_STORAGE_KEY,
+        serializeFactsCache(covered, facts) as unknown as Schema.Json,
+      )
+    } catch (error) {
+      console.error("[opencode-cm-provider] could not cache models.dev facts", toError(error))
+    }
+  }
+
   async function runRefresh(): Promise<RefreshResult> {
     const previous = { ...state }
     try {
@@ -180,6 +253,7 @@ export function createRegistry(
         state.connection = undefined
         state.apiKey = undefined
         state.models = []
+        state.facts = new Map()
         quarantineCredential = undefined
         quarantine.replace([])
         await ctx.provider.reload()
@@ -187,16 +261,19 @@ export function createRegistry(
       }
 
       adoptQuarantine(credential.connection)
-      const models = parseGatewayModels(await fetchCatalogue(credential.key))
+      const models = parseGatewayModels(await fetchCatalogue())
+      const facts = await resolveFacts(models)
       state.connection = credential.connection
       state.apiKey = credential.key
       state.models = models
+      state.facts = facts
       await ctx.provider.reload()
       return { status: "ok", count: models.length }
     } catch (error) {
       state.connection = previous.connection
       state.apiKey = previous.apiKey
       state.models = previous.models
+      state.facts = previous.facts
       return { status: "failed", error: toError(error) }
     }
   }

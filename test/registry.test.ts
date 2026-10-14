@@ -2,7 +2,12 @@ import type { Connection, Credential, Model, Provider } from "@opencode/plugin"
 import { describe, expect, it } from "vitest"
 import { PACKAGE_ANTHROPIC, PACKAGE_CHAT, PACKAGE_RESPONSES } from "../src/discovery.js"
 import { resolveOptions } from "../src/options.js"
-import { createRegistry, STORAGE_KEY, type RegistrySlice } from "../src/registry.js"
+import {
+  createRegistry,
+  MODELS_DEV_STORAGE_KEY,
+  STORAGE_KEY,
+  type RegistrySlice,
+} from "../src/registry.js"
 
 const CONNECTION = {
   type: "credential",
@@ -203,7 +208,7 @@ describe("createRegistry", () => {
     ])
   })
 
-  it("requests the catalogue with a bearer token and the configured headers", async () => {
+  it("requests the catalogue without credentials but with the configured headers", async () => {
     const calls: Array<{ url: string; headers: Record<string, string> }> = []
     const h = harness({
       connection: CONNECTION,
@@ -221,12 +226,15 @@ describe("createRegistry", () => {
     await registry.install()
     await registry.refresh()
 
-    expect(calls).toHaveLength(1)
-    expect(calls[0]?.url).toBe("https://x.test/v1/models")
-    expect(calls[0]?.headers).toMatchObject({
-      authorization: "Bearer user_secret",
-      "x-tenant": "eng",
-    })
+    const gateway = calls.filter((call) => call.url.startsWith("https://x.test/"))
+    expect(gateway).toHaveLength(1)
+    expect(gateway[0]?.url).toBe("https://x.test/v1/models")
+    expect(gateway[0]?.headers).toMatchObject({ accept: "application/json", "x-tenant": "eng" })
+    // The gateway serves /models to anonymous callers, so the key is not sent here. It is
+    // still resolved, because the provider needs it in `settings` to serve real requests.
+    expect(Object.keys(gateway[0]?.headers ?? {}).map((k) => k.toLowerCase())).not.toContain(
+      "authorization",
+    )
   })
 
   it("keeps the last good catalogue when the fetch fails", async () => {
@@ -316,39 +324,59 @@ describe("createRegistry", () => {
     expect(h.added).toHaveLength(1)
   })
 
-  it("serializes refreshes and resolves each credential at the start of its turn", async () => {
+  it("serializes refreshes so the second turn starts only after the first finishes", async () => {
     const order: string[] = []
-    let credentialNumber = 0
+    let active = 0
     const h = harness({
       connection: CONNECTION,
       credential: CREDENTIAL,
-      fetch: (async (_url: string, init: RequestInit) => {
-        const authorization = (init.headers as Record<string, string>).authorization ?? ""
-        order.push(`start:${authorization}`)
-        await new Promise((resolve) => setTimeout(resolve, authorization.endsWith("first") ? 20 : 0))
-        order.push(`finish:${authorization}`)
-        return jsonResponse({ data: [{ id: authorization.endsWith("first") ? "first" : "second" }] })
+      fetch: (async (url: string) => {
+        // Each turn also downloads models.dev once, so only the gateway call is timed.
+        const turn = order.length === 0 ? "first" : "second"
+        if (url.startsWith("https://models.dev")) return jsonResponse({})
+        active += 1
+        expect(active).toBe(1)
+        order.push(`start:${turn}`)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        active -= 1
+        order.push(`finish:${turn}`)
+        return jsonResponse({ data: [{ id: turn }] })
+      }) as unknown as typeof fetch,
+    })
+    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+    await registry.install()
+
+    await Promise.all([registry.refresh(), registry.refresh()])
+
+    expect(order).toEqual(["start:first", "finish:first", "start:second", "finish:second"])
+    expect(registry.current().map((model) => model.id)).toEqual(["second"])
+  })
+
+  it("resolves each credential at the start of its own turn", async () => {
+    let turn = 0
+    const h = harness({
+      connection: CONNECTION,
+      credential: CREDENTIAL,
+      // models.dev is disabled so the gateway catalogue is the only fetch in the turn.
+      fetch: (async () => {
+        turn += 1
+        await new Promise((resolve) => setTimeout(resolve, turn === 1 ? 20 : 0))
+        return jsonResponse({ data: [{ id: turn === 1 ? "first" : "second" }] })
       }) as unknown as typeof fetch,
     })
     ;(h.ctx as unknown as { integration: { connection: { resolve: () => Promise<Credential.Value> } } })
       .integration.connection.resolve = async () => ({
         type: "key",
-        key: ++credentialNumber === 1 ? "first" : "second",
+        key: turn === 1 ? "first" : "second",
       }) as Credential.Value
-    const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+
+    const registry = createRegistry(h.ctx, resolveOptions({ modelsDevURL: "" }), h.deps)
     await registry.install()
-    credentialNumber = 0
+    turn = 0
 
-    const first = registry.refresh()
-    const second = registry.refresh()
-    await Promise.all([first, second])
+    await Promise.all([registry.refresh(), registry.refresh()])
 
-    expect(order).toEqual([
-      "start:Bearer first",
-      "finish:Bearer first",
-      "start:Bearer second",
-      "finish:Bearer second",
-    ])
+    // The key each turn published is the one resolved at the start of that same turn.
     expect(registry.current().map((model) => model.id)).toEqual(["second"])
   })
 
@@ -360,6 +388,245 @@ describe("createRegistry", () => {
     await expect(registry.refresh()).resolves.toMatchObject({
       status: "failed",
       error: { message: "reload failed" },
+    })
+  })
+
+  describe("models.dev enrichment", () => {
+    const modelsDev = {
+      anthropic: {
+        id: "anthropic",
+        models: {
+          "claude-sonnet-5-5": {
+            id: "claude-sonnet-5-5",
+            tool_call: true,
+            modalities: { input: ["text", "image"], output: ["text"] },
+            limit: { context: 1000000, output: 128000 },
+          },
+        },
+      },
+      openai: {
+        id: "openai",
+        models: {
+          "gpt-6.1-sol": {
+            id: "gpt-6.1-sol",
+            tool_call: false,
+            modalities: { input: ["text"], output: ["text"] },
+            limit: { context: 1050000, output: 100000 },
+          },
+        },
+      },
+    }
+
+    /** Answers the gateway catalogue and the models.dev payload from one fetch stub. */
+    function dualFetch(modelsDevBody: unknown = modelsDev, failModelsDev = false) {
+      const urls: string[] = []
+      return {
+        urls,
+        fetch: (async (url: string) => {
+          urls.push(url)
+          if (url.startsWith("https://models.dev")) {
+            if (failModelsDev) return jsonResponse({}, 503)
+            return jsonResponse(modelsDevBody)
+          }
+          return jsonResponse(catalogue)
+        }) as unknown as typeof fetch,
+      }
+    }
+
+    const modelsOf = (h: ReturnType<typeof harness>) => h.added[0]?.models ?? []
+
+    it("fills output limits and capabilities from models.dev", async () => {
+      const d = dualFetch()
+      const h = harness({ connection: CONNECTION, credential: CREDENTIAL, fetch: d.fetch })
+      const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+      await registry.install()
+      await registry.refresh()
+
+      const claude = modelsOf(h).find((m) => m.id === "claude-sonnet-5-5")
+      expect(claude?.limit.output).toBe(128000)
+      expect(claude?.capabilities.input).toEqual(["text", "image"])
+
+      const gpt = modelsOf(h).find((m) => m.id === "gpt-6.1-sol")
+      expect(gpt?.capabilities.tools).toBe(false)
+      expect(gpt?.capabilities.input).toEqual(["text"])
+    })
+
+    it("keeps the gateway context length over a larger models.dev value", async () => {
+      const d = dualFetch()
+      const h = harness({ connection: CONNECTION, credential: CREDENTIAL, fetch: d.fetch })
+      const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+      await registry.install()
+      await registry.refresh()
+
+      // Gateway says 1050000 for gpt-6.1-sol in the fixture and models.dev says the same.
+      const gpt = modelsOf(h).find((m) => m.id === "gpt-6.1-sol")
+      expect(gpt?.limit.context).toBe(1050000)
+    })
+
+    it("leaves an unlisted model on the configured defaults", async () => {
+      const d = dualFetch()
+      const h = harness({ connection: CONNECTION, credential: CREDENTIAL, fetch: d.fetch })
+      const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+      await registry.install()
+      await registry.refresh()
+
+      const stealth = modelsOf(h).find((m) => m.id === "stealth/space-bunny-alpha")
+      expect(stealth?.limit.output).toBe(32000)
+      expect(stealth?.capabilities).toEqual({
+        tools: true,
+        input: ["text", "image"],
+        output: ["text"],
+      })
+    })
+
+    it("caches the reduced facts so later refreshes skip the models.dev request", async () => {
+      const d = dualFetch()
+      const h = harness({ connection: CONNECTION, credential: CREDENTIAL, fetch: d.fetch })
+      const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+      await registry.install()
+
+      await registry.refresh()
+      await registry.refresh()
+
+      expect(d.urls.filter((url) => url.startsWith("https://models.dev"))).toHaveLength(1)
+      expect(d.urls.filter((url) => url.endsWith("/models"))).toHaveLength(2)
+      // Still enriched on the second refresh, from the cache.
+      expect(modelsOf(h)[0]?.limit.output).toBe(128000)
+    })
+
+    it("stores only the slimmed facts rather than the whole payload", async () => {
+      const d = dualFetch()
+      const h = harness({ connection: CONNECTION, credential: CREDENTIAL, fetch: d.fetch })
+      const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+      await registry.install()
+      await registry.refresh()
+
+      const stored = h.storage.get(MODELS_DEV_STORAGE_KEY) as {
+        covered: string[]
+        facts: Record<string, unknown>
+      }
+      expect(Object.keys(stored.facts).sort()).toEqual(["claude-sonnet-5-5", "gpt-6.1-sol"])
+      expect(stored.facts["claude-sonnet-5-5"]).toEqual({
+        context: 1000000,
+        output: 128000,
+        input: ["text", "image"],
+        outputModalities: ["text"],
+        tools: true,
+      })
+    })
+
+    it("records a model models.dev omits as covered so later refreshes skip the download", async () => {
+      const d = dualFetch()
+      const h = harness({ connection: CONNECTION, credential: CREDENTIAL, fetch: d.fetch })
+      const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+      await registry.install()
+      await registry.refresh()
+      await registry.refresh()
+      await registry.refresh()
+
+      expect(d.urls.filter((url) => url.startsWith("https://models.dev"))).toHaveLength(1)
+      const stored = h.storage.get(MODELS_DEV_STORAGE_KEY) as { covered: string[] }
+      expect(stored.covered).toContain("stealth/space-bunny-alpha")
+    })
+
+    it("re-fetches models.dev when the gateway catalogue gains a model", async () => {
+      let catalogue = { data: [{ id: "claude-sonnet-5-5" }] }
+      const urls: string[] = []
+      const h = harness({
+        connection: CONNECTION,
+        credential: CREDENTIAL,
+        fetch: (async (url: string) => {
+          urls.push(url)
+          if (url.startsWith("https://models.dev")) return jsonResponse(modelsDev)
+          return jsonResponse(catalogue)
+        }) as unknown as typeof fetch,
+      })
+      const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+      await registry.install()
+      await registry.refresh()
+
+      catalogue = { data: [{ id: "claude-sonnet-5-5" }, { id: "gpt-6.1-sol" }] }
+      await registry.refresh()
+
+      expect(urls.filter((url) => url.startsWith("https://models.dev"))).toHaveLength(2)
+      expect(h.added[0]?.models.map((m) => m.limit.output)).toEqual([128000, 100000])
+    })
+
+    it("still publishes the catalogue when models.dev is unreachable", async () => {
+      const d = dualFetch(modelsDev, true)
+      const h = harness({ connection: CONNECTION, credential: CREDENTIAL, fetch: d.fetch })
+      const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+      await registry.install()
+
+      await expect(registry.refresh()).resolves.toEqual({ status: "ok", count: 3 })
+      expect(h.added).toHaveLength(1)
+      expect(modelsOf(h).map((m) => m.limit.output)).toEqual([32000, 32000, 32000])
+    })
+
+    it("falls back to the defaults when models.dev returns a malformed payload", async () => {
+      const d = dualFetch("not json at all")
+      const h = harness({ connection: CONNECTION, credential: CREDENTIAL, fetch: d.fetch })
+      const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+      await registry.install()
+
+      await expect(registry.refresh()).resolves.toEqual({ status: "ok", count: 3 })
+      expect(modelsOf(h).map((m) => m.limit.output)).toEqual([32000, 32000, 32000])
+    })
+
+    it("ignores a corrupt cache and refetches", async () => {
+      const d = dualFetch()
+      const h = harness({ connection: CONNECTION, credential: CREDENTIAL, fetch: d.fetch })
+      h.storage.set(MODELS_DEV_STORAGE_KEY, "not an object")
+      const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+      await registry.install()
+
+      await registry.refresh()
+
+      expect(d.urls.filter((url) => url.startsWith("https://models.dev"))).toHaveLength(1)
+      expect(modelsOf(h)[0]?.limit.output).toBe(128000)
+    })
+
+    it("never sends the API key to models.dev", async () => {
+      const seen: Array<Record<string, string>> = []
+      const h = harness({
+        connection: CONNECTION,
+        credential: CREDENTIAL,
+        fetch: (async (url: string, init: RequestInit) => {
+          if (url.startsWith("https://models.dev")) {
+            seen.push(init.headers as Record<string, string>)
+            return jsonResponse(modelsDev)
+          }
+          return jsonResponse(catalogue)
+        }) as unknown as typeof fetch,
+      })
+      const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+      await registry.install()
+      await registry.refresh()
+
+      for (const headers of seen) {
+        expect(Object.keys(headers).map((k) => k.toLowerCase())).not.toContain("authorization")
+      }
+    })
+
+    it("skips models.dev entirely when the URL is empty", async () => {
+      const d = dualFetch()
+      const h = harness({ connection: CONNECTION, credential: CREDENTIAL, fetch: d.fetch })
+      const registry = createRegistry(h.ctx, resolveOptions({ modelsDevURL: "" }), h.deps)
+      await registry.install()
+
+      await expect(registry.refresh()).resolves.toEqual({ status: "ok", count: 3 })
+      expect(d.urls.some((url) => url.startsWith("https://models.dev"))).toBe(false)
+      expect(modelsOf(h).map((m) => m.limit.output)).toEqual([32000, 32000, 32000])
+    })
+
+    it("does not cache partial enrichment when the download fails", async () => {
+      const d = dualFetch(modelsDev, true)
+      const h = harness({ connection: CONNECTION, credential: CREDENTIAL, fetch: d.fetch })
+      const registry = createRegistry(h.ctx, resolveOptions({}), h.deps)
+      await registry.install()
+      await registry.refresh()
+
+      expect(h.storage.has(MODELS_DEV_STORAGE_KEY)).toBe(false)
     })
   })
 

@@ -11,7 +11,7 @@ export interface Options {
   readonly baseURL: string
   readonly providerID: string
   readonly displayName: string
-  readonly refreshInterval: number
+  readonly modelsDevURL: string
   readonly defaultOutput: number
   readonly defaultContext: number
   readonly requestTimeout: number
@@ -21,14 +21,13 @@ export interface Options {
   readonly quarantineOnAuthFailure: boolean
 }
 
-/** Refreshes faster than this are refused; the gateway catalogue changes slowly. */
-export const MIN_REFRESH_INTERVAL = 10_000
+export const MODELS_DEV_URL = "https://models.dev/api.json"
 
 export const DEFAULTS: Options = {
   baseURL: "https://api.commandcode.ai/provider/v1",
   providerID: "CommandCode",
   displayName: "Command Code",
-  refreshInterval: 600_000,
+  modelsDevURL: MODELS_DEV_URL,
   defaultOutput: 32_000,
   defaultContext: 200_000,
   requestTimeout: 15_000,
@@ -119,11 +118,8 @@ export function resolveOptions(raw: unknown): Options {
     baseURL: strippedBaseURL || DEFAULTS.baseURL,
     providerID,
     displayName: nonEmptyString(input.displayName, DEFAULTS.displayName),
-    refreshInterval: clampedInterval(
-      input.refreshInterval,
-      DEFAULTS.refreshInterval,
-      MIN_REFRESH_INTERVAL,
-    ),
+    // An explicit empty string disables enrichment; an absent key uses the default.
+    modelsDevURL: input.modelsDevURL === "" ? "" : nonEmptyString(input.modelsDevURL, DEFAULTS.modelsDevURL),
     defaultOutput: positiveInt(input.defaultOutput, DEFAULTS.defaultOutput),
     defaultContext: positiveInt(input.defaultContext, DEFAULTS.defaultContext),
     requestTimeout: clampedInterval(input.requestTimeout, DEFAULTS.requestTimeout, 1_000),

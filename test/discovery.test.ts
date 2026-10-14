@@ -10,6 +10,7 @@ import {
   toModelInfoList,
   type GatewayModel,
 } from "../src/discovery.js"
+import type { ModelFacts } from "../src/modelsdev.js"
 import { resolveOptions } from "../src/options.js"
 
 const PROVIDER_ID = Provider.ID.make("CommandCode")
@@ -164,6 +165,11 @@ describe("toModelInfo", () => {
     if (!raw) throw new Error(`missing fixture ${id}`)
     return toModelInfo(raw, PROVIDER_ID, options)
   }
+  const withFacts = (id: string, facts: ModelFacts) => {
+    const raw = byId.get(id)
+    if (!raw) throw new Error(`missing fixture ${id}`)
+    return toModelInfo(raw, PROVIDER_ID, options, facts)
+  }
 
   it("uses the gateway context length and the configured output limit", () => {
     expect(info("claude-sonnet-5-5").limit).toEqual({ context: 1000000, output: 32000 })
@@ -245,14 +251,102 @@ describe("toModelInfo", () => {
   })
 })
 
+describe("toModelInfo with models.dev facts", () => {
+  const models = parseGatewayModels(payload)
+  const byId = new Map(models.map((model) => [model.id, model]))
+  const withFacts = (id: string, facts: ModelFacts) => {
+    const raw = byId.get(id)
+    if (!raw) throw new Error(`missing fixture ${id}`)
+    return toModelInfo(raw, PROVIDER_ID, options, facts)
+  }
+
+  it("keeps the gateway context length when models.dev reports the same one", () => {
+    const model = withFacts("claude-sonnet-5-5", { context: 1000000, output: 128000 })
+    expect(model.limit.context).toBe(1000000)
+  })
+
+  it("prefers the gateway context over a conflicting models.dev context", () => {
+    const raw = { id: "solo", context_length: 400000 }
+    expect(toModelInfo(raw, PROVIDER_ID, options, { context: 1050000 }).limit.context).toBe(400000)
+  })
+
+  it("uses the models.dev context only when the gateway omits one", () => {
+    const model = toModelInfo({ id: "bare" }, PROVIDER_ID, options, { context: 256000 })
+    expect(model.limit.context).toBe(256000)
+  })
+
+  it("uses the models.dev context when the gateway context is not positive", () => {
+    const model = toModelInfo({ id: "bad", context_length: -1 }, PROVIDER_ID, options, {
+      context: 256000,
+    })
+    expect(model.limit.context).toBe(256000)
+  })
+
+  it("prefers the models.dev output limit over the configured default", () => {
+    expect(withFacts("claude-sonnet-5-5", { output: 128000 }).limit.output).toBe(128000)
+  })
+
+  it("falls back to the configured output limit when models.dev has none", () => {
+    expect(withFacts("claude-sonnet-5-5", { context: 1000000 }).limit.output).toBe(32000)
+  })
+
+  it("adopts the models.dev input modalities", () => {
+    const model = withFacts("claude-sonnet-5-5", { input: ["text"], outputModalities: ["text"] })
+    expect(model.capabilities.input).toEqual(["text"])
+  })
+
+  it("adopts the models.dev output modalities", () => {
+    const model = withFacts("gpt-6.1-sol", { outputModalities: ["text", "image"] })
+    expect(model.capabilities.output).toEqual(["text", "image"])
+  })
+
+  it("adopts a false tools flag so a non-tool model stops advertising tools", () => {
+    expect(withFacts("gpt-6.1-sol", { tools: false }).capabilities.tools).toBe(false)
+  })
+
+  it("keeps the optimistic default capabilities when models.dev has none", () => {
+    expect(withFacts("gpt-6.1-sol", { output: 1000 }).capabilities).toEqual({
+      tools: true,
+      input: ["text", "image"],
+      output: ["text"],
+    })
+  })
+
+  it("leaves overrides authoritative over models.dev facts", () => {
+    const configured = resolveOptions({ overrides: { "claude-sonnet-5-5": { context: 777, output: 888 } } })
+    const raw = byId.get("claude-sonnet-5-5") as GatewayModel
+    const model = toModelInfo(raw, PROVIDER_ID, configured, { context: 1000000, output: 128000 })
+
+    expect(model.limit).toEqual({ context: 777, output: 888 })
+  })
+})
+
 describe("toModelInfoList", () => {
+  const models = parseGatewayModels(payload)
+  const facts = new Map<string, ModelFacts>([
+    ["claude-sonnet-5-5", { output: 128000 }],
+    ["gpt-6.1-sol", { output: 100000 }],
+  ])
+
   it("maps every discovered model in order", () => {
-    const models = parseGatewayModels(payload)
     const list = toModelInfoList(models, PROVIDER_ID, options)
     expect(list.map((model) => model.id)).toEqual(models.map((model) => model.id))
   })
 
   it("returns an empty list for an empty catalogue", () => {
     expect(toModelInfoList([], PROVIDER_ID, options)).toEqual([])
+  })
+
+  it("applies facts per model and leaves unmatched models on the defaults", () => {
+    const list = toModelInfoList(models, PROVIDER_ID, options, facts)
+    const output = list.map((model) => model.limit.output)
+
+    expect(output).toEqual([128000, 100000, 32000, 32000, 32000])
+  })
+
+  it("is unchanged by an empty facts index", () => {
+    expect(toModelInfoList(models, PROVIDER_ID, options, new Map()).map((m) => m.limit)).toEqual(
+      toModelInfoList(models, PROVIDER_ID, options).map((m) => m.limit),
+    )
   })
 })

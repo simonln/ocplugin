@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { DEFAULTS, MIN_REFRESH_INTERVAL, resolveOptions } from "../src/options.js"
+import { DEFAULTS, resolveOptions } from "../src/options.js"
 
 describe("resolveOptions", () => {
   it("returns defaults for undefined, an empty object, and non-objects", () => {
@@ -10,16 +10,19 @@ describe("resolveOptions", () => {
     expect(resolveOptions([])).toEqual(DEFAULTS)
   })
 
-  it("clamps a too-small refreshInterval up to the minimum", () => {
-    expect(resolveOptions({ refreshInterval: 5 }).refreshInterval).toBe(MIN_REFRESH_INTERVAL)
-    expect(resolveOptions({ refreshInterval: 0.5 }).refreshInterval).toBe(MIN_REFRESH_INTERVAL)
-    expect(resolveOptions({ refreshInterval: 0 }).refreshInterval).toBe(DEFAULTS.refreshInterval)
+  it("drops the retired refreshInterval option", () => {
+    expect(resolveOptions({ refreshInterval: 5 })).toEqual(DEFAULTS)
+    expect(resolveOptions({})).not.toHaveProperty("refreshInterval")
+    expect(DEFAULTS).not.toHaveProperty("refreshInterval")
   })
 
-  it("falls back for a non-positive or non-finite refreshInterval", () => {
-    expect(resolveOptions({ refreshInterval: -1 }).refreshInterval).toBe(DEFAULTS.refreshInterval)
-    expect(resolveOptions({ refreshInterval: Number.NaN }).refreshInterval).toBe(DEFAULTS.refreshInterval)
-    expect(resolveOptions({ refreshInterval: "soon" }).refreshInterval).toBe(DEFAULTS.refreshInterval)
+  it("defaults modelsDevURL and allows it to be disabled with an empty string", () => {
+    expect(resolveOptions({}).modelsDevURL).toBe(DEFAULTS.modelsDevURL)
+    expect(resolveOptions({ modelsDevURL: "" }).modelsDevURL).toBe("")
+    expect(resolveOptions({ modelsDevURL: "   " }).modelsDevURL).toBe(DEFAULTS.modelsDevURL)
+    expect(resolveOptions({ modelsDevURL: "https://mirror.test/api.json" }).modelsDevURL).toBe(
+      "https://mirror.test/api.json",
+    )
   })
 
   it("strips trailing slashes from baseURL", () => {

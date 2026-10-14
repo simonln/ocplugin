@@ -16,39 +16,28 @@ export default Plugin.define({
     await registry.install()
     await registry.refresh()
 
-    // A fresh /connect stores a credential; refresh immediately so the catalogue
-    // appears without restarting the server.
+    // Three refresh points, no polling: startup above, a fresh /connect storing a
+    // credential, and the user switching models. The catalogue is served without
+    // authentication and changes slowly, so a timer would only cost requests.
     const controller = new AbortController()
     void (async () => {
       try {
         for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
           const type = (event as { type?: unknown }).type
-          if (typeof type !== "string" || !type.startsWith("credential.")) continue
+          if (typeof type !== "string") continue
+          if (!type.startsWith("credential.") && type !== "session.model.selected") continue
           try {
             await registry.refresh()
           } catch (error) {
-            console.error("[opencode-cm-provider] credential refresh failed", error)
+            console.error(`[opencode-cm-provider] refresh on ${type} failed`, error)
           }
         }
       } catch (error) {
         if (!controller.signal.aborted) {
-          console.error("[opencode-cm-provider] credential event stream failed", error)
+          console.error("[opencode-cm-provider] event stream failed", error)
         }
       }
     })()
-
-    const timer = setInterval(() => {
-      void registry
-        .refresh()
-        .then((result) => {
-          if (result.status === "failed") {
-            console.error("[opencode-cm-provider] model refresh failed", result.error)
-          }
-        })
-        .catch((error) => {
-          console.error("[opencode-cm-provider] model refresh rejected", error)
-        })
-    }, options.refreshInterval)
 
     if (options.quarantineOnAuthFailure) {
       await ctx.session.hook(
@@ -69,7 +58,6 @@ export default Plugin.define({
 
     return () => {
       controller.abort()
-      clearInterval(timer)
     }
   },
 })

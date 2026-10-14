@@ -1,4 +1,5 @@
 import { Model, type Provider } from "@opencode/plugin"
+import type { ModelFacts } from "./modelsdev.js"
 import type { ModelOverride, Options } from "./options.js"
 
 /**
@@ -79,21 +80,36 @@ function applyOverride(info: Mutable<Model.Info>, override: ModelOverride | unde
   if (override.output !== undefined) info.limit = { ...info.limit, output: override.output }
 }
 
+/** The models.dev facts for one gateway model, or absent when it is not listed there. */
+export type FactsLookup = ReadonlyMap<string, ModelFacts>
+
 export function toModelInfo(
   raw: GatewayModel,
   providerID: Provider.ID,
   options: RangeOptions,
+  facts?: ModelFacts,
 ): Model.Info {
   const info: Mutable<Model.Info> = Model.Info.default(providerID, Model.ID.make(raw.id))
   info.name = raw.name ?? raw.id
   info.package = packageFor(raw.supported_endpoints)
-  info.limit = {
-    context:
-      raw.context_length !== undefined && raw.context_length > 0
-        ? raw.context_length
-        : options.defaultContext,
-    output: options.defaultOutput,
+
+  // The gateway serves the context this model actually accepts, so it outranks models.dev,
+  // which advertises the vendor's own ceiling. models.dev only fills a gap the gateway left.
+  const context =
+    raw.context_length !== undefined && raw.context_length > 0
+      ? raw.context_length
+      : (facts?.context ?? options.defaultContext)
+
+  info.limit = { context, output: facts?.output ?? options.defaultOutput }
+
+  // The gateway reports no capabilities, so models.dev is the only real source. Falling
+  // back to the optimistic default keeps an unlisted model usable at the cost of a 400.
+  info.capabilities = {
+    tools: facts?.tools ?? info.capabilities.tools,
+    input: facts?.input ? [...facts.input] : info.capabilities.input,
+    output: facts?.outputModalities ? [...facts.outputModalities] : info.capabilities.output,
   }
+
   applyOverride(info, options.overrides[raw.id])
   return info
 }
@@ -102,6 +118,7 @@ export function toModelInfoList(
   models: readonly GatewayModel[],
   providerID: Provider.ID,
   options: RangeOptions,
+  facts?: FactsLookup,
 ): Model.Info[] {
-  return models.map((model) => toModelInfo(model, providerID, options))
+  return models.map((model) => toModelInfo(model, providerID, options, facts?.get(model.id)))
 }
