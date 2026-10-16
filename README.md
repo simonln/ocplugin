@@ -29,14 +29,21 @@ automatically, and keeps the API key in OpenCode's credential store instead of
 
 ## Install
 
-Add the plugin to your OpenCode configuration:
+### From GitHub
+
+Add the repository to your OpenCode configuration. OpenCode installs GitHub
+plugins through its npm-compatible package loader:
 
 ```jsonc title="opencode.jsonc"
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["file:///D:/code/repos/ocplugin"],
+  "plugins": ["github:simonln/ocplugin#main"],
 }
 ```
+
+To pin a specific release commit instead of following `main`, replace `main`
+with the commit SHA. The repository includes its compiled `dist/` output, so no
+local build step is required.
 
 Then restart the service and connect:
 
@@ -44,8 +51,19 @@ Then restart the service and connect:
 opencode service restart
 ```
 
-In the TUI, run `/connect`, choose **Command Code**, and paste your API key. The
+In the TUI, run `/connect`, choose **CC**, and paste your API key. The
 catalogue appears in `/models` without a restart.
+
+### From a local checkout
+
+For local development, add the plugin directory to your OpenCode configuration:
+
+```jsonc title="opencode.jsonc"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["file:///D:/code/repos/ocplugin"],
+}
+```
 
 Remove any hand-written `providers.cm` block from `opencode.jsonc` first — this plugin
 owns that provider ID.
@@ -58,7 +76,7 @@ Pass options through the object form of the `plugins` entry:
 {
   "plugins": [
     {
-      "package": "file:///D:/code/repos/ocplugin",
+      "package": "github:simonln/ocplugin#main",
       "options": {
         "defaultOutput": 32000,
       },
@@ -71,7 +89,7 @@ Pass options through the object form of the `plugins` entry:
 | --- | --- | --- |
 | `baseURL` | `https://api.commandcode.ai/provider/v1` | Gateway endpoint. Trailing slashes are stripped. |
 | `providerID` | `CommandCode` | Provider ID. Must not contain `/` or `#`. |
-| `displayName` | `Command Code` | Name shown in `/connect` and `/models`. |
+| `displayName` | `CC` | Name shown in `/connect` and `/models`. |
 | `modelsDevURL` | `https://models.dev/api.json` | Source for output limits and capabilities. Set to `""` to disable. |
 | `defaultOutput` | `32000` | Output token limit when neither the gateway nor models.dev reports one. |
 | `defaultContext` | `200000` | Context limit fallback when the gateway omits `context_length`. |
@@ -87,7 +105,7 @@ Pass options through the object form of the `plugins` entry:
 {
   "plugins": [
     {
-      "package": "file:///D:/code/repos/ocplugin",
+      "package": "github:simonln/ocplugin#main",
       "options": {
         "overrides": {
           "gpt-5.4-mini": { "output": 64000 },
