@@ -26,7 +26,7 @@ export const MODELS_DEV_URL = "https://models.dev/api.json"
 export const DEFAULTS: Options = {
   baseURL: "https://api.commandcode.ai/provider/v1",
   providerID: "CommandCode",
-  displayName: "Command Code",
+  displayName: "CC",
   modelsDevURL: MODELS_DEV_URL,
   defaultOutput: 32_000,
   defaultContext: 200_000,

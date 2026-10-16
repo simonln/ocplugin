@@ -190,7 +190,7 @@ describe("createRegistry", () => {
     expect(record?.info.id).toBe("CommandCode")
     expect(record?.info.activation).toBe("auto")
     expect(record?.info.integrationID).toBe("CommandCode")
-    expect(record?.info.name).toBe("Command Code")
+    expect(record?.info.name).toBe("CC")
     expect(record?.info.package).toBe(PACKAGE_CHAT)
     expect(record?.info.settings).toMatchObject({
       baseURL: "https://api.commandcode.ai/provider/v1",

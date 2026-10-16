@@ -36,7 +36,7 @@ describe("registerIntegration", () => {
     const id = await registerIntegration(fakeContext(recorded), resolveOptions({}))
 
     expect(id).toBe("CommandCode")
-    expect(recorded.names).toEqual([{ id: "CommandCode", name: "Command Code" }])
+    expect(recorded.names).toEqual([{ id: "CommandCode", name: "CC" }])
   })
 
   it("registers a key method whose form field is named apiKey", async () => {
