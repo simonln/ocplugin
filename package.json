@@ -5,14 +5,14 @@
   "type": "module",
   "license": "MIT",
   "main": ".opencode/plugin/index.js",
-  "types": "./dist/index.d.ts",
+  "types": "./.opencode/plugin/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./.opencode/plugin/index.d.ts",
+      "import": "./.opencode/plugin/index.js"
     }
   },
-  "files": ["dist", ".opencode/plugin", "README.md"],
+  "files": [".opencode/plugin", "README.md"],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",

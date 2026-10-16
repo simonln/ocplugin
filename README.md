@@ -42,7 +42,7 @@ plugins through its npm-compatible package loader:
 ```
 
 To pin a specific release commit instead of following `main`, replace `main`
-with the commit SHA. The repository includes its compiled `dist/` output, so no
+with the commit SHA. The repository includes its compiled plugin output, so no
 local build step is required.
 
 Then restart the service and connect:
