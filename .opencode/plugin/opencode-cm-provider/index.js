@@ -3,6 +3,7 @@ import { registerIntegration } from "./integration.js";
 import { resolveOptions } from "./options.js";
 import { createRegistry } from "./registry.js";
 import { isQuarantineStatus } from "./quarantine.js";
+import { rewriteCommandCodeMessages } from "./anthropic.js";
 export default Plugin.define({
     id: "opencode-cm-provider",
     async setup(ctx) {
@@ -11,6 +12,15 @@ export default Plugin.define({
         const registry = createRegistry(ctx, options);
         await registry.install();
         await registry.refresh();
+        await ctx.session.hook("http.request", async (event) => {
+            if (event.model.providerID !== options.providerID)
+                return;
+            const request = await rewriteCommandCodeMessages(event.request);
+            if (request !== event.request) {
+                ;
+                event.request = request;
+            }
+        }, { providerID: options.providerID });
         // Three refresh points, no polling: startup above, a fresh /connect storing a
         // credential, and the user switching models. The catalogue is served without
         // authentication and changes slowly, so a timer would only cost requests.
