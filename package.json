@@ -4,12 +4,12 @@
   "description": "OpenCode plugin that registers the Command Code gateway as a provider with automatic model discovery",
   "type": "module",
   "license": "MIT",
-  "main": ".opencode/plugin/index.js",
-  "types": "./.opencode/plugin/index.d.ts",
+  "main": ".opencode/plugin/opencode-cm-provider/index.js",
+  "types": "./.opencode/plugin/opencode-cm-provider/index.d.ts",
   "exports": {
     ".": {
-      "types": "./.opencode/plugin/index.d.ts",
-      "import": "./.opencode/plugin/index.js"
+      "types": "./.opencode/plugin/opencode-cm-provider/index.d.ts",
+      "import": "./.opencode/plugin/opencode-cm-provider/index.js"
     }
   },
   "files": [".opencode/plugin", "README.md"],

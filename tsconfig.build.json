@@ -2,7 +2,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": ".opencode/plugin"
+    "outDir": ".opencode/plugin/opencode-cm-provider"
   },
   "include": ["src/**/*.ts"]
 }
