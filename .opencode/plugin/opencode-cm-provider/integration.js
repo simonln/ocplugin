@@ -14,16 +14,6 @@ export async function registerIntegration(ctx, options) {
             method: {
                 type: "key",
                 label: "API Key",
-                form: [
-                    {
-                        type: "string",
-                        key: "apiKey",
-                        title: "API Key",
-                        description: `API key issued by ${options.displayName}`,
-                        required: true,
-                        hidden: true,
-                    },
-                ],
             },
         });
     });

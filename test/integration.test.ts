@@ -39,7 +39,7 @@ describe("registerIntegration", () => {
     expect(recorded.names).toEqual([{ id: "CommandCode", name: "CC" }])
   })
 
-  it("registers a key method whose form field is named apiKey", async () => {
+  it("registers a key method without a duplicate form field", async () => {
     const recorded: Recorded = { names: [], methods: [] }
     await registerIntegration(fakeContext(recorded), resolveOptions({}))
 
@@ -54,13 +54,7 @@ describe("registerIntegration", () => {
     }
     expect(method.type).toBe("key")
     expect(method.label).toBe("API Key")
-    expect(method.form).toHaveLength(1)
-    expect(method.form?.[0]).toMatchObject({
-      type: "string",
-      key: "apiKey",
-      required: true,
-      hidden: true,
-    })
+    expect(method.form).toBeUndefined()
   })
 
   it("honours a custom providerID and displayName", async () => {
