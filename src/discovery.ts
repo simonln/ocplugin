@@ -23,6 +23,73 @@ export interface GatewayModel {
 
 type RangeOptions = Pick<Options, "defaultContext" | "defaultOutput" | "overrides">
 
+type ModelVariant = Model.Info["variants"][number]
+
+// @opencode/ai reads this newer compatibility flag at runtime, while the
+// installed SDK type may not expose it yet. CC's Anthropic-compatible endpoint
+// accepts top-level thinking settings but rejects mid-conversation system turns.
+type CompatibilityWithEffortUpdates = NonNullable<Model.Info["compatibility"]> & {
+  supportsEffortUpdates?: boolean
+}
+
+function variant(id: string, settings: Record<string, unknown>): ModelVariant {
+  return { id: id as ModelVariant["id"], settings }
+}
+
+function reasoningVariants(raw: GatewayModel, facts: ModelFacts | undefined): readonly ModelVariant[] {
+  if (facts?.reasoning !== true) return []
+
+  const options = facts.reasoningOptions ?? []
+  const messages = raw.supported_endpoints?.includes("/messages") === true
+  const variants: ModelVariant[] = []
+  for (const option of options) {
+    if (option.type === "toggle") {
+      variants.push(
+        messages
+          ? variant("none", { thinking: { type: "disabled" } })
+          : variant("none", { reasoningEffort: "none" }),
+        messages
+          ? variant("thinking", { thinking: { type: "adaptive" } })
+          : variant("thinking", { reasoningEffort: "high" }),
+      )
+      continue
+    }
+    if (option.type === "effort") {
+      const values = option.values ?? ["low", "medium", "high"]
+      for (const value of values) {
+        variants.push(
+          variant(
+            value,
+            messages
+              ? { thinking: { type: "adaptive", effort: value } }
+              : { reasoningEffort: value },
+          ),
+        )
+      }
+      continue
+    }
+    if (!messages) continue
+    const maximum = Math.max(1, Math.min(option.max ?? 16_000, 32_000))
+    const minimum = Math.max(1, Math.min(option.min ?? 1_024, maximum))
+    variants.push(
+      variant(
+        "high",
+        messages
+          ? { thinking: { type: "enabled", budgetTokens: Math.max(minimum, Math.floor(maximum / 2)) } }
+          : {},
+      ),
+      variant(
+        "max",
+        messages
+          ? { thinking: { type: "enabled", budgetTokens: maximum } }
+          : {},
+      ),
+    )
+  }
+
+  return variants.filter((entry, index) => variants.findIndex((other) => other.id === entry.id) === index)
+}
+
 /**
  * The Anthropic-native models on this gateway reject the OpenAI-compatible layer,
  * so the runtime package follows the endpoints the gateway advertises.
@@ -101,6 +168,16 @@ export function toModelInfo(
       : (facts?.context ?? options.defaultContext)
 
   info.limit = { context, output: facts?.output ?? options.defaultOutput }
+
+  info.variants = [...reasoningVariants(raw, facts)]
+
+  if (raw.supported_endpoints?.includes("/messages") === true) {
+    const compatibility = (info.compatibility ?? {}) as CompatibilityWithEffortUpdates
+    info.compatibility = {
+      ...compatibility,
+      supportsEffortUpdates: false,
+    } as Model.Info["compatibility"]
+  }
 
   // The gateway reports no capabilities, so models.dev is the only real source. Falling
   // back to the optimistic default keeps an unlisted model usable at the cost of a 400.

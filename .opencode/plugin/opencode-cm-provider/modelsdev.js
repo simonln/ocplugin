@@ -61,6 +61,33 @@ function stringArray(value) {
     const out = value.filter((entry) => typeof entry === "string");
     return out.length > 0 ? out : undefined;
 }
+function reasoningOptions(value) {
+    const entries = Array.isArray(value) ? value : value === undefined ? [] : [value];
+    const options = [];
+    for (const entry of entries) {
+        const record = plainRecord(entry);
+        if (!record || (record.type !== "effort" && record.type !== "toggle" && record.type !== "budget_tokens")) {
+            continue;
+        }
+        if (record.type === "toggle") {
+            options.push({ type: "toggle" });
+            continue;
+        }
+        if (record.type === "effort") {
+            const values = stringArray(record.values)?.filter((value) => value !== "null");
+            options.push(values?.length ? { type: "effort", values } : { type: "effort" });
+            continue;
+        }
+        const min = positiveInt(record.min);
+        const max = positiveInt(record.max);
+        options.push({
+            type: "budget_tokens",
+            ...(min === undefined ? {} : { min }),
+            ...(max === undefined ? {} : { max }),
+        });
+    }
+    return options.length > 0 ? options : undefined;
+}
 function readLimit(entry) {
     const limit = plainRecord(entry.limit);
     if (!limit)
@@ -83,11 +110,14 @@ function readEntry(entry) {
     const modalities = plainRecord(record.modalities);
     const input = modalities ? stringArray(modalities.input) : undefined;
     const output = modalities ? stringArray(modalities.output) : undefined;
+    const reasoning = reasoningOptions(record.reasoning_options);
     const facts = {
         ...readLimit(record),
         ...(input === undefined ? {} : { input }),
         ...(output === undefined ? {} : { outputModalities: output }),
         ...(typeof record.tool_call === "boolean" ? { tools: record.tool_call } : {}),
+        ...(typeof record.reasoning === "boolean" ? { reasoning: record.reasoning } : {}),
+        ...(reasoning === undefined ? {} : { reasoningOptions: reasoning }),
     };
     return Object.keys(facts).length > 0 ? facts : undefined;
 }
@@ -104,12 +134,15 @@ function readFacts(entry) {
     const output = positiveInt(record.output);
     const input = stringArray(record.input);
     const outputModalities = stringArray(record.outputModalities);
+    const options = reasoningOptions(record.reasoningOptions);
     const facts = {
         ...(context === undefined ? {} : { context }),
         ...(output === undefined ? {} : { output }),
         ...(input === undefined ? {} : { input }),
         ...(outputModalities === undefined ? {} : { outputModalities }),
         ...(typeof record.tools === "boolean" ? { tools: record.tools } : {}),
+        ...(typeof record.reasoning === "boolean" ? { reasoning: record.reasoning } : {}),
+        ...(options === undefined ? {} : { reasoningOptions: options }),
     };
     return Object.keys(facts).length > 0 ? facts : undefined;
 }
@@ -162,7 +195,8 @@ export function enrichModels(models, payload) {
     }
     return index;
 }
-const EMPTY_CACHE = { facts: new Map(), covered: new Set() };
+const FACTS_CACHE_VERSION = 2;
+const EMPTY_CACHE = { version: FACTS_CACHE_VERSION, facts: new Map(), covered: new Set() };
 /**
  * Rebuilds a cache from `ctx.storage`. Storage holds untrusted JSON that outlived a
  * previous process, so every field is re-validated and a bad entry is dropped whole
@@ -170,6 +204,8 @@ const EMPTY_CACHE = { facts: new Map(), covered: new Set() };
  */
 export function parseFactsCache(value) {
     const record = plainRecord(value);
+    if (record?.version !== FACTS_CACHE_VERSION)
+        return EMPTY_CACHE;
     const factsRecord = plainRecord(record?.facts);
     if (!factsRecord)
         return EMPTY_CACHE;
@@ -184,10 +220,10 @@ export function parseFactsCache(value) {
         if (typeof modelID === "string")
             covered.add(modelID);
     }
-    return { facts, covered };
+    return { version: FACTS_CACHE_VERSION, facts, covered };
 }
 /** Serializes a cache into the shape {@link parseFactsCache} reads back. */
 export function serializeFactsCache(covered, facts) {
-    return { covered: [...covered], facts: Object.fromEntries(facts) };
+    return { version: FACTS_CACHE_VERSION, covered: [...covered], facts: Object.fromEntries(facts) };
 }
 //# sourceMappingURL=modelsdev.js.map

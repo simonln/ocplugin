@@ -19,6 +19,8 @@ const payload = {
         id: "claude-sonnet-5-5",
         name: "Claude Sonnet 5.5",
         tool_call: true,
+        reasoning: true,
+        reasoning_options: { type: "effort", values: ["low", "high", null] },
         release_date: "2026-01-15",
         modalities: { input: ["text", "image", "pdf"], output: ["text"] },
         limit: { context: 1000000, output: 128000 },
@@ -80,6 +82,8 @@ describe("enrichModels", () => {
       input: ["text", "image", "pdf"],
       outputModalities: ["text"],
       tools: true,
+      reasoning: true,
+      reasoningOptions: [{ type: "effort", values: ["low", "high"] }],
     })
   })
 
@@ -145,6 +149,12 @@ describe("enrichModels", () => {
     }
     expect(enrichModels(gateway("widget"), noTools).get("widget")?.tools).toBe(false)
   })
+
+  it("keeps reasoning metadata and removes null effort aliases", () => {
+    const facts = enrichModels(gateway("claude-sonnet-5-5"), payload).get("claude-sonnet-5-5")
+    expect(facts?.reasoning).toBe(true)
+    expect(facts?.reasoningOptions).toEqual([{ type: "effort", values: ["low", "high"] }])
+  })
 })
 
 describe("ORG_PROVIDERS", () => {
@@ -180,6 +190,8 @@ describe("parseFactsCache", () => {
       input: ["text", "image", "pdf"],
       outputModalities: ["text"],
       tools: true,
+      reasoning: true,
+      reasoningOptions: [{ type: "effort", values: ["low", "high"] }],
     })
     expect([...restored.covered]).toEqual(["claude-sonnet-5-5"])
   })
@@ -196,6 +208,7 @@ describe("parseFactsCache", () => {
 
   it("drops entries whose stored shape is wrong and keeps the rest", () => {
     const restored = parseFactsCache({
+      version: 2,
       covered: ["a"],
       facts: {
         good: { context: 1000, output: 20, tools: false },
@@ -223,16 +236,16 @@ describe("parseFactsCache", () => {
   })
 
   it("treats a cache with no facts record as empty", () => {
-    expect(parseFactsCache({ covered: ["a"] }).facts.size).toBe(0)
+    expect(parseFactsCache({ version: 2, covered: ["a"] }).facts.size).toBe(0)
   })
 
   it("ignores a malformed covered list", () => {
-    const restored = parseFactsCache({ covered: ["a", 7, null], facts: {} })
+    const restored = parseFactsCache({ version: 2, covered: ["a", 7, null], facts: {} })
     expect([...restored.covered]).toEqual(["a"])
   })
 
   it("floors fractional limits so they survive the schema's integer field", () => {
-    expect(parseFactsCache({ covered: ["m"], facts: { m: { context: 1000.9, output: 20.5 } } }).facts.get("m"))
+    expect(parseFactsCache({ version: 2, covered: ["m"], facts: { m: { context: 1000.9, output: 20.5 } } }).facts.get("m"))
       .toEqual({ context: 1000, output: 20 })
   })
 })

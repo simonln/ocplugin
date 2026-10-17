@@ -10,7 +10,14 @@ export interface ModelFacts {
   readonly input?: readonly string[]
   readonly outputModalities?: readonly string[]
   readonly tools?: boolean
+  readonly reasoning?: boolean
+  readonly reasoningOptions?: readonly ReasoningOption[]
 }
+
+export type ReasoningOption =
+  | { readonly type: "effort"; readonly values?: readonly string[] }
+  | { readonly type: "toggle" }
+  | { readonly type: "budget_tokens"; readonly min?: number; readonly max?: number }
 
 /** Keyed by gateway model ID, so a cached index maps straight onto a catalogue. */
 export type FactsIndex = ReadonlyMap<string, ModelFacts>
@@ -80,6 +87,34 @@ function stringArray(value: unknown): readonly string[] | undefined {
   return out.length > 0 ? out : undefined
 }
 
+function reasoningOptions(value: unknown): readonly ReasoningOption[] | undefined {
+  const entries = Array.isArray(value) ? value : value === undefined ? [] : [value]
+  const options: ReasoningOption[] = []
+  for (const entry of entries) {
+    const record = plainRecord(entry)
+    if (!record || (record.type !== "effort" && record.type !== "toggle" && record.type !== "budget_tokens")) {
+      continue
+    }
+    if (record.type === "toggle") {
+      options.push({ type: "toggle" })
+      continue
+    }
+    if (record.type === "effort") {
+      const values = stringArray(record.values)?.filter((value) => value !== "null")
+      options.push(values?.length ? { type: "effort", values } : { type: "effort" })
+      continue
+    }
+    const min = positiveInt(record.min)
+    const max = positiveInt(record.max)
+    options.push({
+      type: "budget_tokens",
+      ...(min === undefined ? {} : { min }),
+      ...(max === undefined ? {} : { max }),
+    })
+  }
+  return options.length > 0 ? options : undefined
+}
+
 function readLimit(entry: Record<string, unknown>): Pick<ModelFacts, "context" | "output"> {
   const limit = plainRecord(entry.limit)
   if (!limit) return {}
@@ -101,11 +136,14 @@ function readEntry(entry: unknown): ModelFacts | undefined {
   const modalities = plainRecord(record.modalities)
   const input = modalities ? stringArray(modalities.input) : undefined
   const output = modalities ? stringArray(modalities.output) : undefined
+  const reasoning = reasoningOptions(record.reasoning_options)
   const facts: ModelFacts = {
     ...readLimit(record),
     ...(input === undefined ? {} : { input }),
     ...(output === undefined ? {} : { outputModalities: output }),
     ...(typeof record.tool_call === "boolean" ? { tools: record.tool_call } : {}),
+    ...(typeof record.reasoning === "boolean" ? { reasoning: record.reasoning } : {}),
+    ...(reasoning === undefined ? {} : { reasoningOptions: reasoning }),
   }
   return Object.keys(facts).length > 0 ? facts : undefined
 }
@@ -122,12 +160,15 @@ function readFacts(entry: unknown): ModelFacts | undefined {
   const output = positiveInt(record.output)
   const input = stringArray(record.input)
   const outputModalities = stringArray(record.outputModalities)
+  const options = reasoningOptions(record.reasoningOptions)
   const facts: ModelFacts = {
     ...(context === undefined ? {} : { context }),
     ...(output === undefined ? {} : { output }),
     ...(input === undefined ? {} : { input }),
     ...(outputModalities === undefined ? {} : { outputModalities }),
     ...(typeof record.tools === "boolean" ? { tools: record.tools } : {}),
+    ...(typeof record.reasoning === "boolean" ? { reasoning: record.reasoning } : {}),
+    ...(options === undefined ? {} : { reasoningOptions: options }),
   }
   return Object.keys(facts).length > 0 ? facts : undefined
 }
@@ -192,12 +233,14 @@ export function enrichModels(models: readonly GatewayModel[], payload: unknown):
 
 /** What a stored cache holds: facts plus the catalogue they were derived from. */
 export interface FactsCache {
+  readonly version: 2
   readonly facts: FactsIndex
   /** Gateway model IDs present in the catalogue that produced `facts`. */
   readonly covered: ReadonlySet<string>
 }
 
-const EMPTY_CACHE: FactsCache = { facts: new Map(), covered: new Set() }
+const FACTS_CACHE_VERSION = 2
+const EMPTY_CACHE: FactsCache = { version: FACTS_CACHE_VERSION, facts: new Map(), covered: new Set() }
 
 /**
  * Rebuilds a cache from `ctx.storage`. Storage holds untrusted JSON that outlived a
@@ -206,6 +249,7 @@ const EMPTY_CACHE: FactsCache = { facts: new Map(), covered: new Set() }
  */
 export function parseFactsCache(value: unknown): FactsCache {
   const record = plainRecord(value)
+  if (record?.version !== FACTS_CACHE_VERSION) return EMPTY_CACHE
   const factsRecord = plainRecord(record?.facts)
   if (!factsRecord) return EMPTY_CACHE
 
@@ -220,13 +264,13 @@ export function parseFactsCache(value: unknown): FactsCache {
     if (typeof modelID === "string") covered.add(modelID)
   }
 
-  return { facts, covered }
+  return { version: FACTS_CACHE_VERSION, facts, covered }
 }
 
 /** Serializes a cache into the shape {@link parseFactsCache} reads back. */
 export function serializeFactsCache(
   covered: readonly string[],
   facts: FactsIndex,
-): { covered: string[]; facts: Record<string, ModelFacts> } {
-  return { covered: [...covered], facts: Object.fromEntries(facts) }
+): { version: 2; covered: string[]; facts: Record<string, ModelFacts> } {
+  return { version: FACTS_CACHE_VERSION, covered: [...covered], facts: Object.fromEntries(facts) }
 }

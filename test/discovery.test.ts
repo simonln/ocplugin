@@ -304,6 +304,33 @@ describe("toModelInfo with models.dev facts", () => {
     expect(withFacts("gpt-6.1-sol", { tools: false }).capabilities.tools).toBe(false)
   })
 
+  it("creates reasoning variants for models.dev reasoning metadata", () => {
+    const model = withFacts("gpt-6.1-sol", {
+      reasoning: true,
+      reasoningOptions: [{ type: "effort", values: ["low", "high"] }],
+    })
+    expect(model.variants.map((item) => item.id)).toEqual(["low", "high"])
+    expect(model.variants[0]?.settings).toEqual({ reasoningEffort: "low" })
+  })
+
+  it("uses Anthropic thinking settings for messages models", () => {
+    const model = withFacts("claude-sonnet-5-5", {
+      reasoning: true,
+      reasoningOptions: [{ type: "effort", values: ["high"] }],
+    })
+    expect(model.variants[0]?.settings).toEqual({ thinking: { type: "adaptive", effort: "high" } })
+  })
+
+  it("disables mid-conversation effort updates for messages endpoints", () => {
+    const model = withFacts("claude-sonnet-5-5", { reasoning: true })
+    expect((model.compatibility as { supportsEffortUpdates?: boolean }).supportsEffortUpdates).toBe(false)
+  })
+
+  it("does not invent controls for fixed reasoning models", () => {
+    const model = withFacts("gpt-6.1-sol", { reasoning: true })
+    expect(model.variants).toEqual([])
+  })
+
   it("keeps the optimistic default capabilities when models.dev has none", () => {
     expect(withFacts("gpt-6.1-sol", { output: 1000 }).capabilities).toEqual({
       tools: true,

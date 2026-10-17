@@ -9,7 +9,19 @@ export interface ModelFacts {
     readonly input?: readonly string[];
     readonly outputModalities?: readonly string[];
     readonly tools?: boolean;
+    readonly reasoning?: boolean;
+    readonly reasoningOptions?: readonly ReasoningOption[];
 }
+export type ReasoningOption = {
+    readonly type: "effort";
+    readonly values?: readonly string[];
+} | {
+    readonly type: "toggle";
+} | {
+    readonly type: "budget_tokens";
+    readonly min?: number;
+    readonly max?: number;
+};
 /** Keyed by gateway model ID, so a cached index maps straight onto a catalogue. */
 export type FactsIndex = ReadonlyMap<string, ModelFacts>;
 /**
@@ -30,6 +42,7 @@ export declare function normalizeModelKey(id: string): string;
 export declare function enrichModels(models: readonly GatewayModel[], payload: unknown): FactsIndex;
 /** What a stored cache holds: facts plus the catalogue they were derived from. */
 export interface FactsCache {
+    readonly version: 2;
     readonly facts: FactsIndex;
     /** Gateway model IDs present in the catalogue that produced `facts`. */
     readonly covered: ReadonlySet<string>;
@@ -42,6 +55,7 @@ export interface FactsCache {
 export declare function parseFactsCache(value: unknown): FactsCache;
 /** Serializes a cache into the shape {@link parseFactsCache} reads back. */
 export declare function serializeFactsCache(covered: readonly string[], facts: FactsIndex): {
+    version: 2;
     covered: string[];
     facts: Record<string, ModelFacts>;
 };

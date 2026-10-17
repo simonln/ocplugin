@@ -2,6 +2,45 @@ import { Model } from "@opencode/plugin";
 export const PACKAGE_RESPONSES = "@opencode/ai/providers/openai-compatible/responses";
 export const PACKAGE_CHAT = "@opencode/ai/providers/openai-compatible";
 export const PACKAGE_ANTHROPIC = "@opencode/ai/providers/anthropic-compatible";
+function variant(id, settings) {
+    return { id: id, settings };
+}
+function reasoningVariants(raw, facts) {
+    if (facts?.reasoning !== true)
+        return [];
+    const options = facts.reasoningOptions ?? [];
+    const messages = raw.supported_endpoints?.includes("/messages") === true;
+    const variants = [];
+    for (const option of options) {
+        if (option.type === "toggle") {
+            variants.push(messages
+                ? variant("none", { thinking: { type: "disabled" } })
+                : variant("none", { reasoningEffort: "none" }), messages
+                ? variant("thinking", { thinking: { type: "adaptive" } })
+                : variant("thinking", { reasoningEffort: "high" }));
+            continue;
+        }
+        if (option.type === "effort") {
+            const values = option.values ?? ["low", "medium", "high"];
+            for (const value of values) {
+                variants.push(variant(value, messages
+                    ? { thinking: { type: "adaptive", effort: value } }
+                    : { reasoningEffort: value }));
+            }
+            continue;
+        }
+        if (!messages)
+            continue;
+        const maximum = Math.max(1, Math.min(option.max ?? 16_000, 32_000));
+        const minimum = Math.max(1, Math.min(option.min ?? 1_024, maximum));
+        variants.push(variant("high", messages
+            ? { thinking: { type: "enabled", budgetTokens: Math.max(minimum, Math.floor(maximum / 2)) } }
+            : {}), variant("max", messages
+            ? { thinking: { type: "enabled", budgetTokens: maximum } }
+            : {}));
+    }
+    return variants.filter((entry, index) => variants.findIndex((other) => other.id === entry.id) === index);
+}
 /**
  * The Anthropic-native models on this gateway reject the OpenAI-compatible layer,
  * so the runtime package follows the endpoints the gateway advertises.
@@ -74,6 +113,14 @@ export function toModelInfo(raw, providerID, options, facts) {
         ? raw.context_length
         : (facts?.context ?? options.defaultContext);
     info.limit = { context, output: facts?.output ?? options.defaultOutput };
+    info.variants = [...reasoningVariants(raw, facts)];
+    if (raw.supported_endpoints?.includes("/messages") === true) {
+        const compatibility = (info.compatibility ?? {});
+        info.compatibility = {
+            ...compatibility,
+            supportsEffortUpdates: false,
+        };
+    }
     // The gateway reports no capabilities, so models.dev is the only real source. Falling
     // back to the optimistic default keeps an unlisted model usable at the cost of a 400.
     info.capabilities = {
